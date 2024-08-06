@@ -1,0 +1,11 @@
+WHITESPACE = _{ " " | "\t" | NEWLINE }
+COMMENT = _{ multi_line_comment | single_line_comment }
+multi_line_comment = @{"/*" ~ (!"*/" ~ ANY)* ~ "*/" }
+single_line_comment = @{ "//" ~ (!(NEWLINE | EOI) ~ ANY)* ~ (NEWLINE | EOI) }
+
+ident_start_char = { ASCII_ALPHA | "_" }
+ident_char = { ident_start_char | ASCII_ALPHANUMERIC }
+identifier = @{ ident_start_char ~ (ident_char)* }
+
+
+type_hint = { ":" ~ identifier }

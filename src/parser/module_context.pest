@@ -1,0 +1,29 @@
+// TODO: traits, impl blocks, static/const elements
+module_context = _{ (WHITESPACE | COMMENT)* ~ definition* ~ (WHITESPACE | COMMENT)* }
+definition = _{ struct | enum | function | module_definition }
+
+struct = {
+    "struct" ~ identifier ~ (struct_fields_normal | struct_fields_tuple? ~ ";")
+}
+
+/// Struct fields, tuple-like syntax
+struct_fields_tuple = { "(" ~ (identifier ~ ",")* ~ identifier? ~ ")" }
+/// Struct fields, name + type (normal) syntax
+struct_fields_normal = { "{" ~ (typed_field ~ ",")* ~ typed_field? ~ "}" }
+
+typed_field = { identifier ~ type_hint }
+
+enum = { "enum" ~ identifier ~ "{" ~ (enum_variant ~ ",")* ~ enum_variant? ~ "}" }
+enum_variant = {
+    identifier ~ (struct_fields_normal | struct_fields_tuple)?
+}
+
+function = {
+    "fn" ~ identifier ~ "(" ~ function_def_arguments ~ ")" ~ function_return_type?
+    ~ "{" ~ function_context ~ "}"
+}
+
+function_def_arguments = { (typed_field ~ ",")* ~ typed_field? }
+function_return_type = { "->" ~ identifier }
+
+module_definition = { "mod" ~ identifier ~ (";" | "{" ~ module_context ~ "}") }
