@@ -37,14 +37,31 @@ string_literal_char = {
 }
 
 primary = _{ literal | identifier | "(" ~ expression ~ ")" }
-unary_minus = _{ "-" }
-atom = _{ unary_minus? ~ primary ~ function_call* }
 
-operator = _{ add | subtract | multiply | divide }
-add = { "+" }
-subtract = { "-" }
-multiply = { "*" }
-divide = { "/" }
+prefix = _{ unary_minus | not }
+    unary_minus = { "-" }
+    not = { "!" }
+atom = _{ prefix? ~ primary ~ function_call* }
+
+operator = _{
+    add | subtract | multiply | divide | remainder
+    | and | or
+    | less_than_equals | less_than | greater_than_equals | greater_than
+    | equals | not_equals
+}
+    add = { "+" }
+    subtract = { "-" }
+    multiply = { "*" }
+    divide = { "/" }
+    remainder = { "%" }
+    and = { "&&" }
+    or = { "||" }
+    less_than = { "<" }
+    less_than_equals = { "<=" }
+    greater_than = { ">" }
+    greater_than_equals = { ">=" }
+    equals = { "==" }
+    not_equals = { "!=" }
 
 function_call = { "(" ~ function_call_arguments ~  ")"}
 function_call_arguments = _{ (expression ~ ",")* ~ expression? }

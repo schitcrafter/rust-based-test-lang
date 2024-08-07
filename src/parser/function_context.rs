@@ -3,7 +3,7 @@
 
 use std::sync::LazyLock;
 
-use pest::{iterators::Pairs, pratt_parser::PrattParser, Parser};
+use pest::{iterators::{Pair, Pairs}, pratt_parser::PrattParser, Parser};
 use pest_derive::Parser;
 
 use ast::*;
@@ -46,11 +46,21 @@ pub mod ast {
         Subtract,
         Multiply,
         Divide,
+        Remainder,
+        And,
+        Or,
+        LessThan,
+        LessThanEq,
+        GreaterThan,
+        GreaterThanEq,
+        Eq,
+        NotEq,
     }
 
     #[derive(Debug, PartialEq)]
     pub enum UnaryOperator {
         Minus,
+        Not,
     }
 }
 
@@ -65,9 +75,13 @@ const OPERATOR_PARSER: LazyLock<PrattParser<Rule>> = LazyLock::new(|| {
 
     // Precedence is defined lowest to highest
     PrattParser::new()
+        .op(Op::infix(and, Left) | Op::infix(or, Left))
         .op(Op::infix(add, Left) | Op::infix(subtract, Left))
-        .op(Op::infix(multiply, Left) | Op::infix(divide, Left))
-        .op(Op::prefix(unary_minus))
+        .op(Op::infix(multiply, Left) | Op::infix(divide, Left) | Op::infix(remainder, Left))
+        .op(Op::infix(less_than, Left) | Op::infix(less_than_equals, Left)
+            | Op::infix(greater_than, Left) | Op::infix(greater_than_equals, Left)
+            | Op::infix(equals, Left) | Op::infix(not_equals, Left))        
+        .op(Op::prefix(unary_minus) | Op::prefix(not))
         .op(Op::postfix(function_call))
 });
 
@@ -126,38 +140,12 @@ pub fn parse_function_context<'input>(source: &'input str) -> Vec<Statement> {
 
 pub fn parse_expression<'input>(pairs: Pairs<'input, Rule>) -> Expression<'input> {
     OPERATOR_PARSER
-        .map_primary(|primary| match primary.as_rule() {
-            Rule::identifier => Expression::Identifier(primary.as_str()),
-            Rule::integer => Expression::Integer(primary.as_str().parse().unwrap()),
-            Rule::float => Expression::Float(primary.as_str().parse().unwrap()),
-            Rule::char_literal => { // TODO: unescape characters
-                let inner = primary.into_inner().next()
-                    .expect("Char literal didn't have an inner rule");
-                Expression::Character(unescape_char(inner.as_str()))
-            },
-            Rule::string_literal => { // TODO: unescape characters
-                let inner = primary.into_inner().next()
-                    .expect("String literal didn't have an inner rule");
-                Expression::StringLiteral(unescape_string(inner.as_str()))
-            },
-            Rule::bool_true => Expression::Boolean(true),
-            Rule::bool_false => Expression::Boolean(false),
-            rule => unreachable!("Expr::parse expected atom, found {rule:?}")
-        })
-        .map_infix(|lhs, op, rhs| {
-            let op = match op.as_rule() {
-                Rule::add => BiOperator::Add,
-                Rule::subtract => BiOperator::Subtract,
-                Rule::multiply => BiOperator::Multiply,
-                Rule::divide => BiOperator::Divide,
-                rule => unreachable!("Expr::parse expected infix expression, found {rule:?}")
-            };
-
-            Expression::BinOp { lhs: Box::new(lhs), op, rhs: Box::new(rhs) }
-        })
+        .map_primary(parse_primary_expression)
+        .map_infix(parse_binop_expression)
         .map_prefix(|op, rhs| {
             let op = match op.as_rule() {
                 Rule::unary_minus => UnaryOperator::Minus,
+                Rule::not => UnaryOperator::Not,
                 rule => unreachable!("Expr::parse expected unary operator, found {rule:?}"),
             };
             Expression::UnaryOperator(op, Box::new(rhs))
@@ -170,6 +158,50 @@ pub fn parse_expression<'input>(pairs: Pairs<'input, Rule>) -> Expression<'input
             rule => unreachable!("Expr::parse expected function call, found {rule:?}")
         })
         .parse(pairs)
+}
+
+fn parse_primary_expression<'input>(primary: Pair<'input, Rule>) -> Expression<'input> {
+    match primary.as_rule() {
+        Rule::identifier => Expression::Identifier(primary.as_str()),
+        Rule::integer => Expression::Integer(primary.as_str().parse().unwrap()),
+        Rule::float => Expression::Float(primary.as_str().parse().unwrap()),
+        Rule::char_literal => { // TODO: unescape characters
+            let inner = primary.into_inner().next()
+                .expect("Char literal didn't have an inner rule");
+            Expression::Character(unescape_char(inner.as_str()))
+        },
+        Rule::string_literal => { // TODO: unescape characters
+            let inner = primary.into_inner().next()
+                .expect("String literal didn't have an inner rule");
+            Expression::StringLiteral(unescape_string(inner.as_str()))
+        },
+        Rule::bool_true => Expression::Boolean(true),
+        Rule::bool_false => Expression::Boolean(false),
+        Rule::expression => parse_expression(primary.into_inner()),
+        rule => unreachable!("Expr::parse expected atom, found {rule:?}")
+    }
+}
+
+fn parse_binop_expression<'input>(lhs: Expression<'input>, op: Pair<'input, Rule>, rhs: Expression<'input>) -> Expression<'input> {
+    use BiOperator::*;
+    let op = match op.as_rule() {
+        Rule::add => Add,
+        Rule::subtract => Subtract,
+        Rule::multiply => Multiply,
+        Rule::divide => Divide,
+        Rule::remainder => Remainder,
+        Rule::and => And,
+        Rule::or => Or,
+        Rule::less_than => LessThan,
+        Rule::less_than_equals => LessThanEq,
+        Rule::greater_than => GreaterThan,
+        Rule::greater_than_equals => GreaterThanEq,
+        Rule::equals => Eq,
+        Rule::not_equals => NotEq,
+        rule => unreachable!("Expr::parse expected infix expression, found {rule:?}")
+    };
+
+    Expression::BinOp { lhs: Box::new(lhs), op, rhs: Box::new(rhs) }
 }
 
 fn unescape_char(input_str: &str) -> char {
@@ -305,8 +337,6 @@ mod tests {
             my_function(2, 4, )(); // my_function could return a lambda
             //";
 
-        let statements = parse_function_context(source);
-
         let second_args = vec![2, 3, 4].into_iter()
             .map(Expression::Integer)
             .collect();
@@ -315,7 +345,7 @@ mod tests {
             .map(Expression::Integer)
             .collect();
 
-        assert_eq!(statements, vec![
+        let expected = vec![
             Statement::Expression(Expression::FunctionCall {
                 fn_expr: Box::new(Expression::Identifier("my_function")),
                 arguments: vec![] }
@@ -329,7 +359,11 @@ mod tests {
                 }),
                 arguments: vec![]
             })
-        ]);
+        ];
+
+        let statements = parse_function_context(source);
+
+        assert_eq!(statements, expected);
     }
 
     #[test]
@@ -380,5 +414,102 @@ mod tests {
         let statements = dbg!(parse_function_context(source));
 
         assert_eq!(statements.len(), 4);
+    }
+
+    #[test]
+    fn boolean_expressions() {
+        let source = r"
+            true || false;
+            a || b || c;
+            !((a + b) && false);
+        ";
+
+        use Expression::*;
+        use BiOperator::*;
+        use super::ast::UnaryOperator::*;
+
+        let expected = vec![
+            BinOp {
+                lhs: Box::new(Boolean(true)),
+                op: BiOperator::Or,
+                rhs: Box::new(Boolean(false))
+            },
+            BinOp {
+                lhs: Box::new(BinOp {
+                    lhs: Box::new(Identifier("a")),
+                    op: Or,
+                    rhs: Box::new(Identifier("b"))
+                }),
+                op: Or,
+                rhs: Box::new(Identifier("c"))
+            },
+            UnaryOperator(
+                Not,
+                Box::new(BinOp {
+                    lhs: Box::new(BinOp {
+                        lhs: Box::new(Identifier("a")),
+                        op: BiOperator::Add,
+                        rhs: Box::new(Identifier("b"))
+                    }),
+                    op: BiOperator::And,
+                    rhs: Box::new(Boolean(false))
+                })
+            )
+        ];
+        let expected: Vec<_> = expected.into_iter().map(Statement::Expression).collect();
+        
+        let statements = dbg!(parse_function_context(source));
+
+        assert_eq!(statements, expected);
+    }
+
+        #[test]
+    fn comparisons() {
+        let source = r#"
+            1 <= 2;
+            "one" != "two";
+            1 <= 2 <= 3;
+            (3 < 4) == true;
+        "#;
+
+        use Expression::*;
+        use BiOperator::*;
+        use super::ast::UnaryOperator::*;
+
+        let expected = vec![
+            BinOp {
+                lhs: Box::new(Integer(1)),
+                op: LessThanEq,
+                rhs: Box::new(Integer(2))
+            },
+            BinOp {
+                lhs: Box::new(StringLiteral("one".to_string())),
+                op: NotEq,
+                rhs: Box::new(StringLiteral("two".to_string()))
+            },
+            BinOp {
+                lhs: Box::new(BinOp {
+                        lhs: Box::new(Integer(1)),
+                        op: LessThanEq,
+                        rhs: Box::new(Integer(2))
+                    },),
+                op: LessThanEq,
+                rhs: Box::new(Integer(3))
+            },
+            BinOp {
+                lhs: Box::new(BinOp {
+                    lhs: Box::new(Integer(3)),
+                    op: LessThan,
+                    rhs: Box::new(Integer(4))
+                }),
+                op: Eq,
+                rhs: Box::new(Boolean(true))
+            },
+        ];
+        let expected: Vec<_> = expected.into_iter().map(Statement::Expression).collect();
+        
+        let statements = dbg!(parse_function_context(source));
+
+        assert_eq!(statements, expected);
     }
 }

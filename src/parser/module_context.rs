@@ -67,12 +67,7 @@ pub fn parse_module_context<'input>(source: &'input str) -> Vec<ModuleElement<'i
                 let ident = inner.next().unwrap().as_str();
 
                 let maybe_fields = inner.next();
-                let fields = match maybe_fields.as_ref().map(|pair| pair.as_rule()) {
-                    None => Fields::Empty,
-                    Some(Rule::struct_fields_tuple) => parse_tuple_like_fields(maybe_fields.unwrap()),
-                    Some(Rule::struct_fields_normal) => parse_struct_like_fields(maybe_fields.unwrap()),
-                    rule => unreachable!("Unexpected rule inside struct ({rule:?}")
-                };
+                let fields = parse_all_fields(maybe_fields);
                 ModuleElement::Struct { ident, fields }
             }
             Rule::r#enum => {
@@ -88,6 +83,16 @@ pub fn parse_module_context<'input>(source: &'input str) -> Vec<ModuleElement<'i
     }
 
     module_elements
+}
+
+/// Parses missing fields (None), tuple-like fields, and struct-like fields
+fn parse_all_fields(maybe_fields: Option<Pair<Rule>>) -> Fields {
+    match maybe_fields.as_ref().map(|pair| pair.as_rule()) {
+        None => Fields::Empty,
+        Some(Rule::struct_fields_tuple) => parse_tuple_like_fields(maybe_fields.unwrap()),
+        Some(Rule::struct_fields_normal) => parse_struct_like_fields(maybe_fields.unwrap()),
+        rule => unreachable!("Unexpected rule inside struct: {rule:?}")
+    }
 }
 
 fn parse_tuple_like_fields<'input>(tuple_like: Pair<'input, Rule>) -> Fields<'input> {
@@ -115,12 +120,16 @@ fn parse_struct_like_fields<'input>(struct_like: Pair<'input, Rule>) -> Fields<'
 }
 
 fn parse_enum_variant<'input>(variant: Pair<'input, Rule>) -> (&str, Fields) {
-    
+    let mut inner = variant.into_inner();
+    let ident = inner.next().unwrap().as_str();
+    let maybe_fields = inner.next();
+
+    (ident, parse_all_fields(maybe_fields))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::parse_module_context;
+    use super::*;
 
     #[test]
     fn struct_definition() {
@@ -132,8 +141,14 @@ mod tests {
             }
         ";
 
+        let expected = vec![
+            ModuleElement::Struct { ident: "SomeStruct", fields: Fields::Empty },
+            ModuleElement::Struct { ident: "SomeOtherStruct", fields: Fields::TupleLike(vec!["u64"]) },
+            ModuleElement::Struct { ident: "SomeThirdStruct", fields: Fields::StructLike(vec![("field", "u64")]) }
+        ];
+
         let output = dbg!(parse_module_context(source));
-        assert_eq!(output.len(), 3);
+        assert_eq!(output, expected);
     }
 
     #[test]
@@ -149,8 +164,21 @@ mod tests {
                 }
             }
         ";
+        
+        let expected = vec![
+            ModuleElement::Enum { ident: "SomeEnum", variants: vec![] },
+            ModuleElement::Enum { ident: "SomeOtherEnum", variants:
+                vec![
+                    ("EmptyVariant", Fields::Empty),
+                    ("TupleLikeVariant", Fields::TupleLike(vec!["u64", "u32", "f32"])),
+                    ("StructLikeVariant", Fields::StructLike(
+                        vec![("field", "u64"), ("other", "String")]
+                    ))
+                ]
+            }
+        ];
 
         let output = dbg!(parse_module_context(source));
-        assert_eq!(output.len(), 2);
+        assert_eq!(output, expected);
     }
 }
