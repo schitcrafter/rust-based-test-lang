@@ -26,4 +26,6 @@ function = {
 function_def_arguments = { (typed_field ~ ",")* ~ typed_field? }
 function_return_type = { "->" ~ identifier }
 
-module_definition = { "mod" ~ identifier ~ (";" | "{" ~ module_context ~ "}") }
+module_definition = { "mod" ~ identifier ~ (";" | module_definition_inner ) }
+
+module_definition_inner = { "{" ~ module_context ~ "}" }

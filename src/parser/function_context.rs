@@ -14,6 +14,12 @@ pub mod ast {
     #[derive(Debug, PartialEq)]
     pub struct CodeBlock<'input>(pub Vec<Statement<'input>>);
 
+    impl<'input> From<Vec<Statement<'input>>> for CodeBlock<'input> {
+        fn from(value: Vec<Statement<'input>>) -> Self {
+            Self(value)
+        }
+    }
+
     #[derive(Debug, PartialEq)]
     pub enum Statement<'input> {
         LetExpression {
@@ -22,13 +28,6 @@ pub mod ast {
             rhs: Expression<'input>
         },
         Expression(Expression<'input>),
-        IfElseBlock {
-            if_condition: Expression<'input>,
-            if_block: CodeBlock<'input>,
-            // condition, block
-            else_if_chain: Vec<(Expression<'input>, CodeBlock<'input>)>,
-            else_block: Option<CodeBlock<'input>>,
-        },
         WhileBlock {
             condition: Expression<'input>,
             block: CodeBlock<'input>,
@@ -62,6 +61,13 @@ pub mod ast {
         Assignment {
             variable: &'input str,
             rhs: Box<Expression<'input>>,
+        },
+        IfElseBlock {
+            if_condition: Box<Expression<'input>>,
+            if_block: CodeBlock<'input>,
+            // condition, block
+            else_if_chain: Vec<(Expression<'input>, CodeBlock<'input>)>,
+            else_block: Option<CodeBlock<'input>>,
         },
     }
 
@@ -122,39 +128,7 @@ pub fn parse_function_context(pairs: Pairs<Rule>) -> Vec<Statement> {
         let mut inner = pair.into_inner();
     
         let statement = match rule {
-            Rule::if_else_block => {
-                let if_condition = inner.next().unwrap();
-                let if_condition = parse_expression(if_condition.into_inner());
-                let if_block = inner.next().unwrap();
-                let if_block = parse_function_context(if_block.into_inner());
-
-                let mut else_if_chains = vec![];
-
-                while inner.peek().map(|pair| pair.as_rule()) == Some(Rule::else_if_chain) {
-                    // Found another else if chain
-                    let mut chain = inner.next().unwrap().into_inner();
-                    let chain_cond = parse_expression(chain.next().unwrap().into_inner());
-                    let chain_block = parse_function_context(chain.next().unwrap().into_inner());
-
-                    else_if_chains.push((chain_cond, CodeBlock(chain_block)))
-                }
-
-                let else_block = if inner.peek().map(|pair| pair.as_rule()) == Some(Rule::else_block) {
-                    let mut else_rule_inner = inner.next().unwrap().into_inner();
-                    let else_code_block_rule = else_rule_inner.next().unwrap();
-                    let else_statements = parse_function_context(else_code_block_rule.into_inner());
-                    Some(CodeBlock(else_statements))
-                } else {
-                    None
-                };
-
-                Statement::IfElseBlock {
-                    if_condition,
-                    if_block: CodeBlock(if_block),
-                    else_if_chain: else_if_chains,
-                    else_block
-                }
-            }
+            Rule::if_else_block => Statement::Expression(parse_if_else_block(inner)),
             Rule::while_block => {
                 let condition = inner.next().unwrap();
                 let condition = parse_expression(condition.into_inner());
@@ -247,6 +221,7 @@ pub fn parse_expression<'input>(mut pairs: Pairs<'input, Rule>) -> Expression<'i
             let rhs = parse_expression(rhs);
             Expression::Assignment { variable, rhs: Box::new(rhs) }
         }
+        Rule::if_else_block => parse_if_else_block(inner_expr.into_inner()),
         rule => unreachable!("Expected inner expression, found '{rule:?}'")
     }
 }
@@ -293,6 +268,40 @@ fn parse_binop_expression<'input>(lhs: Expression<'input>, op: Pair<'input, Rule
     };
 
     Expression::BinOp { lhs: Box::new(lhs), op, rhs: Box::new(rhs) }
+}
+
+fn parse_if_else_block<'input>(mut inner: Pairs<'input, Rule>) -> Expression<'input> {
+    let if_condition = inner.next().unwrap();
+    let if_condition = parse_expression(if_condition.into_inner());
+    let if_block = inner.next().unwrap();
+    let if_block = parse_function_context(if_block.into_inner());
+
+    let mut else_if_chains = vec![];
+
+    while inner.peek().map(|pair| pair.as_rule()) == Some(Rule::else_if_chain) {
+        // Found another else if chain
+        let mut chain = inner.next().unwrap().into_inner();
+        let chain_cond = parse_expression(chain.next().unwrap().into_inner());
+        let chain_block = parse_function_context(chain.next().unwrap().into_inner());
+
+        else_if_chains.push((chain_cond, CodeBlock(chain_block)))
+    }
+
+    let else_block = if inner.peek().map(|pair| pair.as_rule()) == Some(Rule::else_block) {
+        let mut else_rule_inner = inner.next().unwrap().into_inner();
+        let else_code_block_rule = else_rule_inner.next().unwrap();
+        let else_statements = parse_function_context(else_code_block_rule.into_inner());
+        Some(CodeBlock(else_statements))
+    } else {
+        None
+    };
+
+    Expression::IfElseBlock {
+        if_condition: Box::new(if_condition),
+        if_block: CodeBlock(if_block),
+        else_if_chain: else_if_chains,
+        else_block
+    }
 }
 
 fn unescape_char(input_str: &str) -> char {
@@ -371,6 +380,8 @@ fn unescape_string(input: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::vec;
+
     use super::*;
 
     #[test]
@@ -625,19 +636,19 @@ mod tests {
 
         let expected = vec![
             IfElseBlock {
-                if_condition: Boolean(true),
+                if_condition: Box::new(Boolean(true)),
                 if_block: CodeBlock(vec![]),
                 else_if_chain: vec![],
                 else_block: None
             },
             IfElseBlock {
-                if_condition: BinOp { lhs: Box::new(Identifier("a")), op: Eq, rhs: Box::new(Integer(3)) },
+                if_condition: Box::new(BinOp { lhs: Box::new(Identifier("a")), op: Eq, rhs: Box::new(Integer(3)) }),
                 if_block: CodeBlock(vec![]),
                 else_if_chain: vec![],
                 else_block: Some(CodeBlock(vec![Expression(StringLiteral("c".to_string()))]))
             },
             IfElseBlock {
-                if_condition: Identifier("a"),
+                if_condition: Box::new(Identifier("a")),
                 if_block: CodeBlock(vec![]),
                 else_if_chain: vec![
                     (Identifier("c"), CodeBlock(vec![]))
@@ -645,7 +656,7 @@ mod tests {
                 else_block: None
             },
             IfElseBlock {
-                if_condition: Identifier("a"),
+                if_condition: Box::new(Identifier("a")),
                 if_block: CodeBlock(vec![]),
                 else_if_chain: vec![
                     (Identifier("c"), CodeBlock(vec![]))
@@ -653,12 +664,43 @@ mod tests {
                 else_block: Some(CodeBlock(vec![]))
             }
         ];
+        let expected: Vec<_> = expected.into_iter().map(Statement::Expression).collect();
         
         let statements = dbg!(parse_function_str(source));
 
         assert_eq!(statements, expected);
     }
 
+    #[test]
+    fn if_blocks_as_expressions() {
+        let source = r#"
+            let a = if b { 3; } else { 5; };
+        "#;
+
+        use Expression::*;
+
+        let expected = vec![
+            Statement::LetExpression {
+                variable_binding: "a",
+                type_hint: None,
+                rhs: Expression::IfElseBlock {
+                    // if_condition: Box::new(BinOp {
+                    //     lhs: Box::new(Identifier("b")),
+                    //     op: BiOperator::Eq,
+                    //     rhs: Box::new(Integer(0)),
+                    // }),
+                    if_condition: Box::new(Identifier("b")),
+                    if_block: vec![Statement::Expression(Integer(3))].into(),
+                    else_if_chain: vec![],
+                    else_block: CodeBlock(vec![Statement::Expression(Integer(5))]).into()
+                }
+            }
+        ];
+
+        let statements = dbg!(parse_function_str(source));
+
+        assert_eq!(statements, expected);
+    }
     
     #[test]
     fn while_blocks() {

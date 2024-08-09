@@ -80,7 +80,8 @@ let_statement = { "let" ~ identifier ~ type_hint? ~ "=" ~ expression }
 assignment = { identifier ~ "=" ~ expression }
 
 expression = {
-    assignment
+    if_else_block
+    | assignment
     | operator_expression
 }
 

@@ -11,7 +11,7 @@ The code quality isn't good (mainly error handling is missing), that's because I
  - [ ] chained comparators
  - [x] assignment without let
  - [ ] control structures (if, while, for, match)
- - [ ] functions
+ - [x] functions
  - [ ] nested modules
  - [ ] static/const elements
  - [ ] traits

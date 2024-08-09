@@ -2,7 +2,7 @@
 //! i.e. functions, structs, enums,
 //! traits, other modules etc.
 
-use pest::{iterators::Pair, Parser};
+use pest::{iterators::{Pair, Pairs}, Parser};
 
 use ast::*;
 
@@ -12,7 +12,7 @@ pub mod ast {
     use crate::parser::function_context::ast::CodeBlock;
 
     #[derive(Debug, PartialEq)]
-    pub enum ModuleElement<'input> {
+    pub enum OuterExpression<'input> {
         Struct {
             ident: &'input str,
             fields: Fields<'input>,
@@ -27,9 +27,12 @@ pub mod ast {
             return_type: Option<&'input str>,
             inner: CodeBlock<'input>,
         },
+        /// If inner is `None`, it was a module defined with a
+        /// semicolon (`mod my_mod;`), if it is `Some` it
+        /// was defined with curly brackets.
         ModuleDefinition {
             ident: &'input str,
-            inner: Vec<ModuleElement<'input>>,
+            inner: Option<Vec<OuterExpression<'input>>>,
         },
         // TODO:
         StaticElement,
@@ -47,10 +50,14 @@ pub mod ast {
     }
 }
 
-pub fn parse_module_context<'input>(source: &'input str) -> Vec<ModuleElement<'input>> {
+pub fn parse_module_context_str<'input>(source: &'input str) -> Vec<OuterExpression<'input>> {
     let rules = PestParser::parse(Rule::module_context, source)
         .expect("Couldn't parse module context");
 
+    parse_module_context(rules)
+}
+
+pub fn parse_module_context<'input>(rules: Pairs<'input, Rule>) -> Vec<OuterExpression<'input>> {
     let mut module_elements = vec![];
 
     for pair in rules {
@@ -63,14 +70,14 @@ pub fn parse_module_context<'input>(source: &'input str) -> Vec<ModuleElement<'i
 
                 let maybe_fields = inner.next();
                 let fields = parse_all_fields(maybe_fields);
-                ModuleElement::Struct { ident, fields }
+                OuterExpression::Struct { ident, fields }
             }
             Rule::r#enum => {
                 let ident = inner.next().unwrap().as_str();
                 
                 let variants = inner.map(parse_enum_variant).collect();
 
-                ModuleElement::Enum { ident, variants }
+                OuterExpression::Enum { ident, variants }
             }
             Rule::function => {
                 let ident = inner.next().unwrap().as_str();
@@ -98,12 +105,26 @@ pub fn parse_module_context<'input>(source: &'input str) -> Vec<ModuleElement<'i
                 let code_block = inner.next().unwrap();
                 let code_block = parse_function_context(code_block.into_inner());
 
-                ModuleElement::Function {
+                OuterExpression::Function {
                     ident,
                     arguments,
                     return_type,
                     inner: CodeBlock(code_block)
                 }
+            }
+            Rule::module_definition => {
+                let ident = inner.next().unwrap().as_str();
+
+                let mod_inner = match inner.peek().map(|pair| pair.as_rule()) {
+                    None => None,
+                    Some(Rule::module_definition_inner) => {
+                        let mod_inner = inner.next().unwrap();
+                        Some(parse_module_context(mod_inner.into_inner()))
+                    }
+                    Some(rule) => unreachable!("Found unexpected rule '{rule:?}' inside a mod definition")
+                };
+
+                OuterExpression::ModuleDefinition { ident, inner: mod_inner }
             }
             rule => unreachable!("Encountered unexpected rule {rule:?} in module context")
         };
@@ -172,12 +193,12 @@ mod tests {
         ";
 
         let expected = vec![
-            ModuleElement::Struct { ident: "SomeStruct", fields: Fields::Empty },
-            ModuleElement::Struct { ident: "SomeOtherStruct", fields: Fields::TupleLike(vec!["u64"]) },
-            ModuleElement::Struct { ident: "SomeThirdStruct", fields: Fields::StructLike(vec![("field", "u64")]) }
+            OuterExpression::Struct { ident: "SomeStruct", fields: Fields::Empty },
+            OuterExpression::Struct { ident: "SomeOtherStruct", fields: Fields::TupleLike(vec!["u64"]) },
+            OuterExpression::Struct { ident: "SomeThirdStruct", fields: Fields::StructLike(vec![("field", "u64")]) }
         ];
 
-        let output = dbg!(parse_module_context(source));
+        let output = dbg!(parse_module_context_str(source));
         assert_eq!(output, expected);
     }
 
@@ -196,8 +217,8 @@ mod tests {
         ";
         
         let expected = vec![
-            ModuleElement::Enum { ident: "SomeEnum", variants: vec![] },
-            ModuleElement::Enum { ident: "SomeOtherEnum", variants:
+            OuterExpression::Enum { ident: "SomeEnum", variants: vec![] },
+            OuterExpression::Enum { ident: "SomeOtherEnum", variants:
                 vec![
                     ("EmptyVariant", Fields::Empty),
                     ("TupleLikeVariant", Fields::TupleLike(vec!["u64", "u32", "f32"])),
@@ -208,7 +229,7 @@ mod tests {
             }
         ];
 
-        let output = dbg!(parse_module_context(source));
+        let output = dbg!(parse_module_context_str(source));
         assert_eq!(output, expected);
     }
 
@@ -219,7 +240,7 @@ mod tests {
         fn other_func(a: f64, b: f64) -> f64 { }
         ";
 
-        use ModuleElement::*;
+        use OuterExpression::*;
         
         let expected = vec![
             Function {
@@ -236,7 +257,48 @@ mod tests {
             }
         ];
 
-        let output = dbg!(parse_module_context(source));
+        let output = dbg!(parse_module_context_str(source));
+        assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn module_definition_with_fns() {
+        let source = r"
+        mod my_cool_mod {
+            fn my_func() { }
+            fn other_func(a: f64, b: f64) -> f64 { }
+        }
+        mod my_inner_mod;
+        mod my_third_mod { }
+        ";
+
+        use OuterExpression::*;
+        
+        let fns = vec![
+            Function {
+                ident: "my_func",
+                arguments: vec![],
+                return_type: None,
+                inner: CodeBlock(vec![])
+            },
+            Function {
+                ident: "other_func",
+                arguments: vec![("a", "f64"), ("b", "f64")],
+                return_type: Some("f64"),
+                inner: CodeBlock(vec![])
+            }
+        ];
+
+        let expected = vec![
+            ModuleDefinition {
+                ident: "my_cool_mod",
+                inner: Some(fns),
+            },
+            ModuleDefinition { ident: "my_inner_mod", inner: None },
+            ModuleDefinition { ident: "my_third_mod", inner: Some(vec![]) }
+        ];
+
+        let output = dbg!(parse_module_context_str(source));
         assert_eq!(output, expected);
     }
 }
