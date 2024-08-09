@@ -9,6 +9,7 @@ The code quality isn't good (mainly error handling is missing), that's because I
  - [x] boolean operators
  - [x] comparisons
  - [ ] chained comparators
+ - [x] assignment without let
  - [ ] control structures (if, while, for, match)
  - [ ] functions
  - [ ] nested modules

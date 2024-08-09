@@ -3,7 +3,8 @@ wrapped_function_context = _{ SOI ~ function_context ~ EOI }
 // the comment and whitespace things here will be implied when
 // using this in another rule, but they aren't when using it standalone,
 // i.e. in tests.
-function_context = _{ (COMMENT | WHITESPACE)* ~ (statement ~ ";")* ~ (COMMENT | WHITESPACE)*}
+code_block = { "{" ~ function_context ~ "}" }
+function_context = _{ (COMMENT | WHITESPACE)* ~ (statement)* ~ (COMMENT | WHITESPACE)*}
 
 literal = _{ bool_true | bool_false | char_literal | string_literal | float | integer }
 
@@ -67,12 +68,34 @@ function_call = { "(" ~ function_call_arguments ~  ")"}
 function_call_arguments = _{ (expression ~ ",")* ~ expression? }
 
 statement = _{
-    let_statement
-    | expression
+    let_statement ~ ";"
+    | if_else_block
+    | while_block
+    | for_each_loop
+    | expression ~ ";"
 }
 
 let_statement = { "let" ~ identifier ~ type_hint? ~ "=" ~ expression }
 
+assignment = { identifier ~ "=" ~ expression }
+
 expression = {
-    atom ~ (operator ~ atom)*
+    assignment
+    | operator_expression
 }
+
+operator_expression = { atom ~ (operator ~ atom)* }
+
+if_else_block = {
+    if_block
+    ~ else_if_chain*
+    ~ else_block?
+}
+
+if_block = _{ "if" ~ expression ~ code_block }
+else_if_chain = { "else" ~ "if" ~ expression ~ code_block }
+else_block = { "else" ~ code_block }
+
+while_block = { "while" ~ expression ~ code_block }
+
+for_each_loop = { "for" ~ identifier ~ "in" ~ expression ~ code_block }

@@ -4,11 +4,15 @@
 use std::sync::LazyLock;
 
 use pest::{iterators::{Pair, Pairs}, pratt_parser::PrattParser, Parser};
-use pest_derive::Parser;
 
 use ast::*;
 
+use super::{PestParser, Rule};
+
 pub mod ast {
+
+    #[derive(Debug, PartialEq)]
+    pub struct CodeBlock<'input>(pub Vec<Statement<'input>>);
 
     #[derive(Debug, PartialEq)]
     pub enum Statement<'input> {
@@ -18,6 +22,23 @@ pub mod ast {
             rhs: Expression<'input>
         },
         Expression(Expression<'input>),
+        IfElseBlock {
+            if_condition: Expression<'input>,
+            if_block: CodeBlock<'input>,
+            // condition, block
+            else_if_chain: Vec<(Expression<'input>, CodeBlock<'input>)>,
+            else_block: Option<CodeBlock<'input>>,
+        },
+        WhileBlock {
+            condition: Expression<'input>,
+            block: CodeBlock<'input>,
+        },
+        /// `for a in b` { ... }``
+        ForEachLoop {
+            iterator_var_ident: &'input str,
+            iterator_expression: Expression<'input>,
+            block: CodeBlock<'input>,
+        }
     }
 
     #[derive(Debug, PartialEq)]
@@ -37,7 +58,11 @@ pub mod ast {
         FunctionCall {
             fn_expr: Box<Expression<'input>>,
             arguments: Vec<Expression<'input>>,
-        }
+        },
+        Assignment {
+            variable: &'input str,
+            rhs: Box<Expression<'input>>,
+        },
     }
 
     #[derive(Debug, PartialEq)]
@@ -64,11 +89,6 @@ pub mod ast {
     }
 }
 
-#[derive(Parser)]
-#[grammar = "parser/function_context.pest"]
-#[grammar = "parser/base_rules.pest"]
-pub struct FunctionContextParser;
-
 const OPERATOR_PARSER: LazyLock<PrattParser<Rule>> = LazyLock::new(|| {
     use pest::pratt_parser::{Assoc::*, Op};
     use Rule::*;
@@ -85,19 +105,79 @@ const OPERATOR_PARSER: LazyLock<PrattParser<Rule>> = LazyLock::new(|| {
         .op(Op::postfix(function_call))
 });
 
-pub fn parse_function_context<'input>(source: &'input str) -> Vec<Statement> {
-    let pairs = FunctionContextParser::parse(Rule::function_context, source)
+pub fn parse_function_str<'input>(source: &'input str) -> Vec<Statement> {
+    let pairs = PestParser::parse(Rule::function_context, source)
             .expect("Parsing failed");
 
     // let pairs = dbg!(pairs);
 
+    parse_function_context(pairs)
+}
+
+pub fn parse_function_context(pairs: Pairs<Rule>) -> Vec<Statement> {
     let mut statements = vec![];
 
     for pair in pairs {
         let rule = pair.as_rule();
         let mut inner = pair.into_inner();
-        
+    
         let statement = match rule {
+            Rule::if_else_block => {
+                let if_condition = inner.next().unwrap();
+                let if_condition = parse_expression(if_condition.into_inner());
+                let if_block = inner.next().unwrap();
+                let if_block = parse_function_context(if_block.into_inner());
+
+                let mut else_if_chains = vec![];
+
+                while inner.peek().map(|pair| pair.as_rule()) == Some(Rule::else_if_chain) {
+                    // Found another else if chain
+                    let mut chain = inner.next().unwrap().into_inner();
+                    let chain_cond = parse_expression(chain.next().unwrap().into_inner());
+                    let chain_block = parse_function_context(chain.next().unwrap().into_inner());
+
+                    else_if_chains.push((chain_cond, CodeBlock(chain_block)))
+                }
+
+                let else_block = if inner.peek().map(|pair| pair.as_rule()) == Some(Rule::else_block) {
+                    let mut else_rule_inner = inner.next().unwrap().into_inner();
+                    let else_code_block_rule = else_rule_inner.next().unwrap();
+                    let else_statements = parse_function_context(else_code_block_rule.into_inner());
+                    Some(CodeBlock(else_statements))
+                } else {
+                    None
+                };
+
+                Statement::IfElseBlock {
+                    if_condition,
+                    if_block: CodeBlock(if_block),
+                    else_if_chain: else_if_chains,
+                    else_block
+                }
+            }
+            Rule::while_block => {
+                let condition = inner.next().unwrap();
+                let condition = parse_expression(condition.into_inner());
+                let block = inner.next().unwrap();
+                let block = parse_function_context(block.into_inner());
+
+                Statement::WhileBlock { condition, block: CodeBlock(block) }
+            }
+            Rule::for_each_loop => {
+                let iterator_var_ident = inner.next().unwrap().as_str();
+
+                let iterator_expression = inner.next().unwrap();
+                let iterator_expression = parse_expression(iterator_expression.into_inner());
+
+                let block = inner.next().unwrap();
+                let block = parse_function_context(block.into_inner());
+
+                Statement::ForEachLoop {
+                    iterator_var_ident,
+                    iterator_expression,
+                    block: CodeBlock(block)
+                }
+            }
             Rule::let_statement => {
                 let variable_binding = inner.next().expect("First inner rule of let_statement didn't exist");
                 let variable_binding = match variable_binding.as_rule() {
@@ -112,10 +192,10 @@ pub fn parse_function_context<'input>(source: &'input str) -> Vec<Statement> {
                     if typename.as_rule() != Rule::identifier {
                         panic!("Rule inside type hint was not an identifier but a {:?}", typename.as_rule());
                     }
-                    
+                
                     // If the second inner rule was a type hint, the third will now be the right-hand side
                     possible_rhs = inner.next().expect("Third inner rule of let statement with type hint didn't exist");
-                    
+                
                     Some(typename.as_str())
                 } else {
                     None
@@ -126,10 +206,10 @@ pub fn parse_function_context<'input>(source: &'input str) -> Vec<Statement> {
                     type_hint,
                     rhs: parse_expression(possible_rhs.into_inner())
                 }
-            },
+            }
             Rule::expression => Statement::Expression(parse_expression(inner)),
             Rule::EOI => continue,
-            rule => unreachable!("Expected let statement or expression, found {rule:?}")
+            rule => unreachable!("Expected let/if-else/while/... statement, expression, found {rule:?}")
         };
 
         statements.push(statement);
@@ -138,26 +218,37 @@ pub fn parse_function_context<'input>(source: &'input str) -> Vec<Statement> {
     statements
 }
 
-pub fn parse_expression<'input>(pairs: Pairs<'input, Rule>) -> Expression<'input> {
-    OPERATOR_PARSER
-        .map_primary(parse_primary_expression)
-        .map_infix(parse_binop_expression)
-        .map_prefix(|op, rhs| {
-            let op = match op.as_rule() {
-                Rule::unary_minus => UnaryOperator::Minus,
-                Rule::not => UnaryOperator::Not,
-                rule => unreachable!("Expr::parse expected unary operator, found {rule:?}"),
-            };
-            Expression::UnaryOperator(op, Box::new(rhs))
-        })
-        .map_postfix(|lhs, op| match op.as_rule() {
-            Rule::function_call => Expression::FunctionCall {
-                fn_expr: Box::new(lhs),
-                arguments: op.into_inner().map(|arg| parse_expression(arg.into_inner())).collect()
-            },
-            rule => unreachable!("Expr::parse expected function call, found {rule:?}")
-        })
-        .parse(pairs)
+pub fn parse_expression<'input>(mut pairs: Pairs<'input, Rule>) -> Expression<'input> {
+    let inner_expr = pairs.next().unwrap();
+    match inner_expr.as_rule() {
+        Rule::operator_expression => OPERATOR_PARSER
+            .map_primary(parse_primary_expression)
+            .map_infix(parse_binop_expression)
+            .map_prefix(|op, rhs| {
+                let op = match op.as_rule() {
+                    Rule::unary_minus => UnaryOperator::Minus,
+                    Rule::not => UnaryOperator::Not,
+                    rule => unreachable!("Expr::parse expected unary operator, found {rule:?}"),
+                };
+                Expression::UnaryOperator(op, Box::new(rhs))
+            })
+            .map_postfix(|lhs, op| match op.as_rule() {
+                Rule::function_call => Expression::FunctionCall {
+                    fn_expr: Box::new(lhs),
+                    arguments: op.into_inner().map(|arg| parse_expression(arg.into_inner())).collect()
+                },
+                rule => unreachable!("Expr::parse expected function call, found {rule:?}")
+            })
+            .parse(inner_expr.into_inner()),
+        Rule::assignment => {
+            let mut inner = inner_expr.into_inner(); 
+            let variable = inner.next().unwrap().as_str();
+            let rhs = inner.next().unwrap().into_inner();
+            let rhs = parse_expression(rhs);
+            Expression::Assignment { variable, rhs: Box::new(rhs) }
+        }
+        rule => unreachable!("Expected inner expression, found '{rule:?}'")
+    }
 }
 
 fn parse_primary_expression<'input>(primary: Pair<'input, Rule>) -> Expression<'input> {
@@ -165,12 +256,12 @@ fn parse_primary_expression<'input>(primary: Pair<'input, Rule>) -> Expression<'
         Rule::identifier => Expression::Identifier(primary.as_str()),
         Rule::integer => Expression::Integer(primary.as_str().parse().unwrap()),
         Rule::float => Expression::Float(primary.as_str().parse().unwrap()),
-        Rule::char_literal => { // TODO: unescape characters
+        Rule::char_literal => {
             let inner = primary.into_inner().next()
                 .expect("Char literal didn't have an inner rule");
             Expression::Character(unescape_char(inner.as_str()))
         },
-        Rule::string_literal => { // TODO: unescape characters
+        Rule::string_literal => {
             let inner = primary.into_inner().next()
                 .expect("String literal didn't have an inner rule");
             Expression::StringLiteral(unescape_string(inner.as_str()))
@@ -284,16 +375,23 @@ mod tests {
 
     #[test]
     fn simple_function_context() {
-        let source = "let smth = 3;";
+        let source = "
+            let smth = 3;
+            smth = 5;
+        ";
 
-        let statements = parse_function_context(source);
+        let statements = parse_function_str(source);
 
         assert_eq!(statements, vec![
             Statement::LetExpression {
                 variable_binding: "smth",
                 type_hint: None,
                 rhs: Expression::Integer(3)
-            }
+            },
+            Statement::Expression(Expression::Assignment {
+                variable: "smth",
+                rhs: Box::new(Expression::Integer(5))
+            })
         ]);
     }
 
@@ -302,7 +400,7 @@ mod tests {
         let source = "(3+4) * 17 / -3";
 
         
-        let pairs = FunctionContextParser::parse(Rule::expression, source)
+        let pairs = PestParser::parse(Rule::expression, source)
             .expect("Parsing failed");
 
         println!("{pairs:#?}");
@@ -318,7 +416,7 @@ mod tests {
         // another comment after
         ";
         
-        let statements = parse_function_context(source);
+        let statements = parse_function_str(source);
 
         assert_eq!(statements, vec![
             Statement::LetExpression {
@@ -361,7 +459,7 @@ mod tests {
             })
         ];
 
-        let statements = parse_function_context(source);
+        let statements = parse_function_str(source);
 
         assert_eq!(statements, expected);
     }
@@ -370,7 +468,7 @@ mod tests {
     fn let_with_type_hint() {
         let source = r"let something: String = test;";
 
-        let statements = parse_function_context(source);
+        let statements = parse_function_str(source);
 
         assert_eq!(statements,
             vec![
@@ -396,7 +494,7 @@ mod tests {
             let h = 3;
         "#;
 
-        let statements = dbg!(parse_function_context(source));
+        let statements = dbg!(parse_function_str(source));
 
         assert_eq!(statements.len(), 8);
     }
@@ -411,7 +509,7 @@ mod tests {
         ";
 
         
-        let statements = dbg!(parse_function_context(source));
+        let statements = dbg!(parse_function_str(source));
 
         assert_eq!(statements.len(), 4);
     }
@@ -458,12 +556,12 @@ mod tests {
         ];
         let expected: Vec<_> = expected.into_iter().map(Statement::Expression).collect();
         
-        let statements = dbg!(parse_function_context(source));
+        let statements = dbg!(parse_function_str(source));
 
         assert_eq!(statements, expected);
     }
 
-        #[test]
+    #[test]
     fn comparisons() {
         let source = r#"
             1 <= 2;
@@ -474,7 +572,6 @@ mod tests {
 
         use Expression::*;
         use BiOperator::*;
-        use super::ast::UnaryOperator::*;
 
         let expected = vec![
             BinOp {
@@ -508,7 +605,112 @@ mod tests {
         ];
         let expected: Vec<_> = expected.into_iter().map(Statement::Expression).collect();
         
-        let statements = dbg!(parse_function_context(source));
+        let statements = dbg!(parse_function_str(source));
+
+        assert_eq!(statements, expected);
+    }
+
+    #[test]
+    fn if_blocks() {
+        let source = r#"
+        if true { }
+        if a == 3 { } else { "c"; }
+        if a { } else if c { }
+        if a { } else if c { } else { }
+        "#;
+
+        use Statement::*;
+        use super::ast::Expression::*;
+        use BiOperator::*;
+
+        let expected = vec![
+            IfElseBlock {
+                if_condition: Boolean(true),
+                if_block: CodeBlock(vec![]),
+                else_if_chain: vec![],
+                else_block: None
+            },
+            IfElseBlock {
+                if_condition: BinOp { lhs: Box::new(Identifier("a")), op: Eq, rhs: Box::new(Integer(3)) },
+                if_block: CodeBlock(vec![]),
+                else_if_chain: vec![],
+                else_block: Some(CodeBlock(vec![Expression(StringLiteral("c".to_string()))]))
+            },
+            IfElseBlock {
+                if_condition: Identifier("a"),
+                if_block: CodeBlock(vec![]),
+                else_if_chain: vec![
+                    (Identifier("c"), CodeBlock(vec![]))
+                ],
+                else_block: None
+            },
+            IfElseBlock {
+                if_condition: Identifier("a"),
+                if_block: CodeBlock(vec![]),
+                else_if_chain: vec![
+                    (Identifier("c"), CodeBlock(vec![]))
+                ],
+                else_block: Some(CodeBlock(vec![]))
+            }
+        ];
+        
+        let statements = dbg!(parse_function_str(source));
+
+        assert_eq!(statements, expected);
+    }
+
+    
+    #[test]
+    fn while_blocks() {
+        let source = r#"
+            while a == true {
+                set_a();
+            }
+        "#;
+
+        use Statement::*;
+        use super::ast::Expression::*;
+        use BiOperator::*;
+
+        let expected = vec![
+            WhileBlock {
+                condition: BinOp { lhs: Box::new(Identifier("a")), op: Eq, rhs: Box::new(Boolean(true)) },
+                block: CodeBlock(vec![
+                    Statement::Expression(FunctionCall { fn_expr: Box::new(Identifier("set_a")), arguments: vec![] })
+                ])
+            }
+        ];
+        
+        let statements = dbg!(parse_function_str(source));
+
+        assert_eq!(statements, expected);
+    }
+
+    #[test]
+    fn for_each_loops() {
+        let source = r#"
+            for a in some_list {
+                println(a);
+            }
+        "#;
+
+        use Statement::*;
+        use super::ast::Expression::*;
+
+        let expected = vec![
+            ForEachLoop {
+                iterator_var_ident: "a", 
+                iterator_expression: Identifier("some_list"),
+                block: CodeBlock(vec![
+                    Statement::Expression(FunctionCall {
+                        fn_expr: Box::new(Identifier("println")),
+                        arguments: vec![Identifier("a")]
+                    })
+                ])
+            }
+        ];
+        
+        let statements = dbg!(parse_function_str(source));
 
         assert_eq!(statements, expected);
     }

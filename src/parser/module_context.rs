@@ -2,13 +2,14 @@
 //! i.e. functions, structs, enums,
 //! traits, other modules etc.
 
-use pest::{iterators::{Pair, Pairs}, Parser};
-use pest_derive::Parser;
+use pest::{iterators::Pair, Parser};
 
 use ast::*;
 
+use super::{function_context::{ast::CodeBlock, parse_function_context}, PestParser, Rule};
+
 pub mod ast {
-    use crate::parser::function_context;
+    use crate::parser::function_context::ast::CodeBlock;
 
     #[derive(Debug, PartialEq)]
     pub enum ModuleElement<'input> {
@@ -24,7 +25,7 @@ pub mod ast {
             ident: &'input str,
             arguments: Vec<(&'input str, &'input str)>,
             return_type: Option<&'input str>,
-            inner: Vec<function_context::ast::Statement<'input>>
+            inner: CodeBlock<'input>,
         },
         ModuleDefinition {
             ident: &'input str,
@@ -46,14 +47,8 @@ pub mod ast {
     }
 }
 
-#[derive(Parser)]
-#[grammar = "parser/base_rules.pest"]
-#[grammar = "parser/function_context.pest"]
-#[grammar = "parser/module_context.pest"]
-pub struct ModuleContextParser;
-
 pub fn parse_module_context<'input>(source: &'input str) -> Vec<ModuleElement<'input>> {
-    let rules = ModuleContextParser::parse(Rule::module_context, source)
+    let rules = PestParser::parse(Rule::module_context, source)
         .expect("Couldn't parse module context");
 
     let mut module_elements = vec![];
@@ -76,6 +71,39 @@ pub fn parse_module_context<'input>(source: &'input str) -> Vec<ModuleElement<'i
                 let variants = inner.map(parse_enum_variant).collect();
 
                 ModuleElement::Enum { ident, variants }
+            }
+            Rule::function => {
+                let ident = inner.next().unwrap().as_str();
+                
+                let arguments_pairs = inner.next().unwrap().into_inner();
+
+                let mut arguments = vec![];
+
+                for pair in arguments_pairs {
+                    let mut arg_inner = pair.into_inner();
+                    let arg_ident = arg_inner.next().unwrap().as_str();
+                    let arg_type = arg_inner.next().unwrap();
+                    let arg_type = arg_type.into_inner().next().unwrap().as_str();
+
+                    arguments.push((arg_ident, arg_type));
+                }
+
+                let return_type = if inner.peek().map(|pair| pair.as_rule()) == Some(Rule::function_return_type) {
+                    let return_type_rule = inner.next().unwrap();
+                    Some(return_type_rule.into_inner().next().unwrap().as_str())
+                } else {
+                    None
+                };
+
+                let code_block = inner.next().unwrap();
+                let code_block = parse_function_context(code_block.into_inner());
+
+                ModuleElement::Function {
+                    ident,
+                    arguments,
+                    return_type,
+                    inner: CodeBlock(code_block)
+                }
             }
             rule => unreachable!("Encountered unexpected rule {rule:?} in module context")
         };
@@ -129,6 +157,8 @@ fn parse_enum_variant<'input>(variant: Pair<'input, Rule>) -> (&str, Fields) {
 
 #[cfg(test)]
 mod tests {
+    use crate::parser::function_context::ast::CodeBlock;
+
     use super::*;
 
     #[test]
@@ -175,6 +205,34 @@ mod tests {
                         vec![("field", "u64"), ("other", "String")]
                     ))
                 ]
+            }
+        ];
+
+        let output = dbg!(parse_module_context(source));
+        assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn function_definition() {
+        let source = r"
+        fn my_func() { }
+        fn other_func(a: f64, b: f64) -> f64 { }
+        ";
+
+        use ModuleElement::*;
+        
+        let expected = vec![
+            Function {
+                ident: "my_func",
+                arguments: vec![],
+                return_type: None,
+                inner: CodeBlock(vec![])
+            },
+            Function {
+                ident: "other_func",
+                arguments: vec![("a", "f64"), ("b", "f64")],
+                return_type: Some("f64"),
+                inner: CodeBlock(vec![])
             }
         ];
 

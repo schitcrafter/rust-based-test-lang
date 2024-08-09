@@ -20,7 +20,7 @@ enum_variant = {
 
 function = {
     "fn" ~ identifier ~ "(" ~ function_def_arguments ~ ")" ~ function_return_type?
-    ~ "{" ~ function_context ~ "}"
+    ~ code_block
 }
 
 function_def_arguments = { (typed_field ~ ",")* ~ typed_field? }
