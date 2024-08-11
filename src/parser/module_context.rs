@@ -178,6 +178,7 @@ fn parse_enum_variant<'input>(variant: Pair<'input, Rule>) -> (&str, Fields) {
 
 #[cfg(test)]
 mod tests {
+    use similar_asserts::assert_eq;
     use crate::parser::function_context::ast::CodeBlock;
 
     use super::*;

@@ -33,13 +33,7 @@ command = [
     "--", "--color", "always" # see https://github.com/Canop/bacon/issues/124
 ]
 need_stdout = true
-
-[jobs.test-stdout]
-command = [
-    "cargo", "test", "--color", "always",
-    "--", "--color", "always", "--show-output" # see https://github.com/Canop/bacon/issues/124
-]
-need_stdout = true
+env.CLICOLOR_FORCE="true" # force color output for `console` crate, used by lots of stuff
 
 [jobs.doc]
 command = ["cargo", "doc", "--color", "always", "--no-deps"]

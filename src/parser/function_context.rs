@@ -380,6 +380,7 @@ fn unescape_string(input: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use similar_asserts::assert_eq;
     use std::vec;
 
     use super::*;
