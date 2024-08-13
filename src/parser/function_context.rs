@@ -3,97 +3,12 @@
 
 use std::sync::LazyLock;
 
-use pest::{iterators::{Pair, Pairs}, pratt_parser::PrattParser, Parser};
+use pest::{iterators::{Pair, Pairs}, pratt_parser::PrattParser};
+use pest::Parser as _;
 
-use ast::*;
+use crate::ast::*;
 
-use super::{PestParser, Rule};
-
-pub mod ast {
-
-    #[derive(Debug, PartialEq)]
-    pub struct CodeBlock<'input>(pub Vec<Statement<'input>>);
-
-    impl<'input> From<Vec<Statement<'input>>> for CodeBlock<'input> {
-        fn from(value: Vec<Statement<'input>>) -> Self {
-            Self(value)
-        }
-    }
-
-    #[derive(Debug, PartialEq)]
-    pub enum Statement<'input> {
-        LetExpression {
-            variable_binding: &'input str,
-            type_hint: Option<&'input str>,
-            rhs: Expression<'input>
-        },
-        Expression(Expression<'input>),
-        WhileBlock {
-            condition: Expression<'input>,
-            block: CodeBlock<'input>,
-        },
-        /// `for a in b` { ... }``
-        ForEachLoop {
-            iterator_var_ident: &'input str,
-            iterator_expression: Expression<'input>,
-            block: CodeBlock<'input>,
-        }
-    }
-
-    #[derive(Debug, PartialEq)]
-    pub enum Expression<'input> {
-        Integer(i64),
-        Float(f64),
-        StringLiteral(String),
-        Boolean(bool),
-        Character(char),
-        Identifier(&'input str),
-        BinOp {
-            lhs: Box<Expression<'input>>,
-            op: BiOperator,
-            rhs: Box<Expression<'input>>,
-        },
-        UnaryOperator(UnaryOperator, Box<Expression<'input>>),
-        FunctionCall {
-            fn_expr: Box<Expression<'input>>,
-            arguments: Vec<Expression<'input>>,
-        },
-        Assignment {
-            variable: &'input str,
-            rhs: Box<Expression<'input>>,
-        },
-        IfElseBlock {
-            if_condition: Box<Expression<'input>>,
-            if_block: CodeBlock<'input>,
-            // condition, block
-            else_if_chain: Vec<(Expression<'input>, CodeBlock<'input>)>,
-            else_block: Option<CodeBlock<'input>>,
-        },
-    }
-
-    #[derive(Debug, PartialEq)]
-    pub enum BiOperator {
-        Add,
-        Subtract,
-        Multiply,
-        Divide,
-        Remainder,
-        And,
-        Or,
-        LessThan,
-        LessThanEq,
-        GreaterThan,
-        GreaterThanEq,
-        Eq,
-        NotEq,
-    }
-
-    #[derive(Debug, PartialEq)]
-    pub enum UnaryOperator {
-        Minus,
-        Not,
-    }
-}
+use super::{Parser, PestParser, Rule};
 
 const OPERATOR_PARSER: LazyLock<PrattParser<Rule>> = LazyLock::new(|| {
     use pest::pratt_parser::{Assoc::*, Op};
@@ -111,196 +26,202 @@ const OPERATOR_PARSER: LazyLock<PrattParser<Rule>> = LazyLock::new(|| {
         .op(Op::postfix(function_call))
 });
 
-pub fn parse_function_str<'input>(source: &'input str) -> Vec<Statement> {
+/// Helper function to parse a function from a string
+fn parse_function_str<'input>(source: &'input str) -> Vec<Statement<'input>> {
+    let parser = Parser::new(source);
     let pairs = PestParser::parse(Rule::function_context, source)
             .expect("Parsing failed");
 
     // let pairs = dbg!(pairs);
 
-    parse_function_context(pairs)
+    parser.parse_function_context(pairs)
 }
 
-pub fn parse_function_context(pairs: Pairs<Rule>) -> Vec<Statement> {
-    let mut statements = vec![];
+impl<'input> Parser<'input> {
+    pub fn parse_function_context(&self, pairs: Pairs<'input, Rule>) -> Vec<Statement<'input>> {
+        let mut statements = vec![];
 
-    for pair in pairs {
-        let rule = pair.as_rule();
-        let mut inner = pair.into_inner();
-    
-        let statement = match rule {
-            Rule::if_else_block => Statement::Expression(parse_if_else_block(inner)),
-            Rule::while_block => {
-                let condition = inner.next().unwrap();
-                let condition = parse_expression(condition.into_inner());
-                let block = inner.next().unwrap();
-                let block = parse_function_context(block.into_inner());
+        for pair in pairs {
+            let rule = pair.as_rule();
+            let mut inner = pair.into_inner();
+        
+            let statement: Statement<'input> = match rule {
+                Rule::if_else_block => Statement::Expression(self.parse_if_else_block(inner)),
+                Rule::while_block => {
+                    let condition = inner.next().unwrap();
+                    let condition = self.parse_expression(condition.into_inner());
+                    let block = inner.next().unwrap();
+                    let block = self.parse_function_context(block.into_inner());
 
-                Statement::WhileBlock { condition, block: CodeBlock(block) }
-            }
-            Rule::for_each_loop => {
-                let iterator_var_ident = inner.next().unwrap().as_str();
-
-                let iterator_expression = inner.next().unwrap();
-                let iterator_expression = parse_expression(iterator_expression.into_inner());
-
-                let block = inner.next().unwrap();
-                let block = parse_function_context(block.into_inner());
-
-                Statement::ForEachLoop {
-                    iterator_var_ident,
-                    iterator_expression,
-                    block: CodeBlock(block)
+                    Statement::WhileBlock { condition, block: CodeBlock(block) }
                 }
-            }
-            Rule::let_statement => {
-                let variable_binding = inner.next().expect("First inner rule of let_statement didn't exist");
-                let variable_binding = match variable_binding.as_rule() {
-                    Rule::identifier => variable_binding.as_str(),
-                    rule => unreachable!("Found rule {rule:?} while looking for identifier in a let statement")
-                };
+                Rule::for_each_loop => {
+                    let iterator_var_ident = inner.next().unwrap().as_str();
 
-                let mut possible_rhs = inner.next().expect("Second inner rule of let statement didn't exist");
+                    let iterator_expression = inner.next().unwrap();
+                    let iterator_expression = self.parse_expression(iterator_expression.into_inner());
 
-                let type_hint = if possible_rhs.as_rule() == Rule::type_hint {
-                    let typename = possible_rhs.into_inner().next().expect("No inner rule inside type_hint in let binding");
-                    if typename.as_rule() != Rule::identifier {
-                        panic!("Rule inside type hint was not an identifier but a {:?}", typename.as_rule());
+                    let block = inner.next().unwrap();
+                    let block = self.parse_function_context(block.into_inner());
+
+                    Statement::ForEachLoop {
+                        iterator_var_ident: iterator_var_ident.into(),
+                        iterator_expression,
+                        block: CodeBlock(block),
+                        node_id: NodeId::NOT_YET_ASSIGNED
                     }
-                
-                    // If the second inner rule was a type hint, the third will now be the right-hand side
-                    possible_rhs = inner.next().expect("Third inner rule of let statement with type hint didn't exist");
-                
-                    Some(typename.as_str())
-                } else {
-                    None
-                };
-
-                Statement::LetExpression {
-                    variable_binding,
-                    type_hint,
-                    rhs: parse_expression(possible_rhs.into_inner())
                 }
+                Rule::let_statement => {
+                    let variable_binding = inner.next().expect("First inner rule of let_statement didn't exist");
+                    let variable_binding = match variable_binding.as_rule() {
+                        Rule::identifier => variable_binding.as_str(),
+                        rule => unreachable!("Found rule {rule:?} while looking for identifier in a let statement")
+                    };
+
+                    let mut possible_rhs = inner.next().expect("Second inner rule of let statement didn't exist");
+
+                    let type_hint = if possible_rhs.as_rule() == Rule::type_hint {
+                        let typename = possible_rhs.into_inner().next().expect("No inner rule inside type_hint in let binding");
+                        if typename.as_rule() != Rule::identifier {
+                            panic!("Rule inside type hint was not an identifier but a {:?}", typename.as_rule());
+                        }
+                    
+                        // If the second inner rule was a type hint, the third will now be the right-hand side
+                        possible_rhs = inner.next().expect("Third inner rule of let statement with type hint didn't exist");
+                    
+                        Some(typename.as_str())
+                    } else {
+                        None
+                    };
+
+                    Statement::LetExpression {
+                        node_id: NodeId::NOT_YET_ASSIGNED,
+                        variable_binding: Ident::new(&variable_binding),
+                        type_hint: type_hint.map(Path::new),
+                        rhs: self.parse_expression(possible_rhs.into_inner())
+                    }
+                }
+                Rule::expression => Statement::Expression(self.parse_expression(inner)),
+                Rule::EOI => continue,
+                rule => unreachable!("Expected let/if-else/while/... statement, expression, found {rule:?}")
+            };
+
+            statements.push(statement);
+        }
+
+        statements
+    }
+
+    pub fn parse_expression(&self, mut pairs: Pairs<'input, Rule>) -> Expression<'input> {
+        let inner_expr = pairs.next().unwrap();
+        match inner_expr.as_rule() {
+            Rule::operator_expression => OPERATOR_PARSER
+                .map_primary(|prim| self.parse_primary_expression(prim))
+                .map_infix(|lhs, op, rhs| self.parse_binop_expression(lhs, op, rhs))
+                .map_prefix(|op, rhs| {
+                    let op = match op.as_rule() {
+                        Rule::unary_minus => UnaryOperator::Minus,
+                        Rule::not => UnaryOperator::Not,
+                        rule => unreachable!("Expr::parse expected unary operator, found {rule:?}"),
+                    };
+                    Expression::UnaryOperator(op, Box::new(rhs))
+                })
+                .map_postfix(|lhs, op| match op.as_rule() {
+                    Rule::function_call => Expression::FunctionCall {
+                        fn_expr: Box::new(lhs),
+                        arguments: op.into_inner().map(|arg| self.parse_expression(arg.into_inner())).collect()
+                    },
+                    rule => unreachable!("Expr::parse expected function call, found {rule:?}")
+                })
+                .parse(inner_expr.into_inner()),
+            Rule::assignment => {
+                let mut inner = inner_expr.into_inner(); 
+                let variable = inner.next().unwrap().as_str().into();
+                let rhs = inner.next().unwrap().into_inner();
+                let rhs = self.parse_expression(rhs);
+                Expression::Assignment { variable, rhs: Box::new(rhs) }
             }
-            Rule::expression => Statement::Expression(parse_expression(inner)),
-            Rule::EOI => continue,
-            rule => unreachable!("Expected let/if-else/while/... statement, expression, found {rule:?}")
+            Rule::if_else_block => self.parse_if_else_block(inner_expr.into_inner()),
+            rule => unreachable!("Expected inner expression, found '{rule:?}'")
+        }
+    }
+
+    fn parse_primary_expression(&self, primary: Pair<'input, Rule>) -> Expression<'input> {
+        match primary.as_rule() {
+            Rule::identifier => Expression::Identifier(primary.as_str().into()),
+            Rule::integer => Expression::Integer(primary.as_str().parse().unwrap()),
+            Rule::float => Expression::Float(primary.as_str().parse().unwrap()),
+            Rule::char_literal => {
+                let inner = primary.into_inner().next()
+                    .expect("Char literal didn't have an inner rule");
+                Expression::Character(unescape_char(inner.as_str()))
+            },
+            Rule::string_literal => {
+                let inner = primary.into_inner().next()
+                    .expect("String literal didn't have an inner rule");
+                Expression::StringLiteral(unescape_string(inner.as_str()))
+            },
+            Rule::bool_true => Expression::Boolean(true),
+            Rule::bool_false => Expression::Boolean(false),
+            Rule::expression => self.parse_expression(primary.into_inner()),
+            rule => unreachable!("Expr::parse expected atom, found {rule:?}")
+        }
+    }
+
+    fn parse_binop_expression(&self, lhs: Expression<'input>, op: Pair<'input, Rule>, rhs: Expression<'input>) -> Expression<'input> {
+        use BiOperator::*;
+        let op = match op.as_rule() {
+            Rule::add => Add,
+            Rule::subtract => Subtract,
+            Rule::multiply => Multiply,
+            Rule::divide => Divide,
+            Rule::remainder => Remainder,
+            Rule::and => And,
+            Rule::or => Or,
+            Rule::less_than => LessThan,
+            Rule::less_than_equals => LessThanEq,
+            Rule::greater_than => GreaterThan,
+            Rule::greater_than_equals => GreaterThanEq,
+            Rule::equals => Eq,
+            Rule::not_equals => NotEq,
+            rule => unreachable!("Expr::parse expected infix expression, found {rule:?}")
         };
 
-        statements.push(statement);
+        Expression::BinOp { lhs: Box::new(lhs), op, rhs: Box::new(rhs) }
     }
 
-    statements
-}
+    fn parse_if_else_block(&self, mut inner: Pairs<'input, Rule>) -> Expression<'input> {
+        let if_condition = inner.next().unwrap();
+        let if_condition = self.parse_expression(if_condition.into_inner());
+        let if_block = inner.next().unwrap();
+        let if_block = self.parse_function_context(if_block.into_inner());
 
-pub fn parse_expression<'input>(mut pairs: Pairs<'input, Rule>) -> Expression<'input> {
-    let inner_expr = pairs.next().unwrap();
-    match inner_expr.as_rule() {
-        Rule::operator_expression => OPERATOR_PARSER
-            .map_primary(parse_primary_expression)
-            .map_infix(parse_binop_expression)
-            .map_prefix(|op, rhs| {
-                let op = match op.as_rule() {
-                    Rule::unary_minus => UnaryOperator::Minus,
-                    Rule::not => UnaryOperator::Not,
-                    rule => unreachable!("Expr::parse expected unary operator, found {rule:?}"),
-                };
-                Expression::UnaryOperator(op, Box::new(rhs))
-            })
-            .map_postfix(|lhs, op| match op.as_rule() {
-                Rule::function_call => Expression::FunctionCall {
-                    fn_expr: Box::new(lhs),
-                    arguments: op.into_inner().map(|arg| parse_expression(arg.into_inner())).collect()
-                },
-                rule => unreachable!("Expr::parse expected function call, found {rule:?}")
-            })
-            .parse(inner_expr.into_inner()),
-        Rule::assignment => {
-            let mut inner = inner_expr.into_inner(); 
-            let variable = inner.next().unwrap().as_str();
-            let rhs = inner.next().unwrap().into_inner();
-            let rhs = parse_expression(rhs);
-            Expression::Assignment { variable, rhs: Box::new(rhs) }
+        let mut else_if_chains = vec![];
+
+        while inner.peek().map(|pair| pair.as_rule()) == Some(Rule::else_if_chain) {
+            // Found another else if chain
+            let mut chain = inner.next().unwrap().into_inner();
+            let chain_cond = self.parse_expression(chain.next().unwrap().into_inner());
+            let chain_block = self.parse_function_context(chain.next().unwrap().into_inner());
+
+            else_if_chains.push((chain_cond, CodeBlock(chain_block)))
         }
-        Rule::if_else_block => parse_if_else_block(inner_expr.into_inner()),
-        rule => unreachable!("Expected inner expression, found '{rule:?}'")
-    }
-}
 
-fn parse_primary_expression<'input>(primary: Pair<'input, Rule>) -> Expression<'input> {
-    match primary.as_rule() {
-        Rule::identifier => Expression::Identifier(primary.as_str()),
-        Rule::integer => Expression::Integer(primary.as_str().parse().unwrap()),
-        Rule::float => Expression::Float(primary.as_str().parse().unwrap()),
-        Rule::char_literal => {
-            let inner = primary.into_inner().next()
-                .expect("Char literal didn't have an inner rule");
-            Expression::Character(unescape_char(inner.as_str()))
-        },
-        Rule::string_literal => {
-            let inner = primary.into_inner().next()
-                .expect("String literal didn't have an inner rule");
-            Expression::StringLiteral(unescape_string(inner.as_str()))
-        },
-        Rule::bool_true => Expression::Boolean(true),
-        Rule::bool_false => Expression::Boolean(false),
-        Rule::expression => parse_expression(primary.into_inner()),
-        rule => unreachable!("Expr::parse expected atom, found {rule:?}")
-    }
-}
+        let else_block = if inner.peek().map(|pair| pair.as_rule()) == Some(Rule::else_block) {
+            let mut else_rule_inner = inner.next().unwrap().into_inner();
+            let else_code_block_rule = else_rule_inner.next().unwrap();
+            let else_statements = self.parse_function_context(else_code_block_rule.into_inner());
+            Some(CodeBlock(else_statements))
+        } else {
+            None
+        };
 
-fn parse_binop_expression<'input>(lhs: Expression<'input>, op: Pair<'input, Rule>, rhs: Expression<'input>) -> Expression<'input> {
-    use BiOperator::*;
-    let op = match op.as_rule() {
-        Rule::add => Add,
-        Rule::subtract => Subtract,
-        Rule::multiply => Multiply,
-        Rule::divide => Divide,
-        Rule::remainder => Remainder,
-        Rule::and => And,
-        Rule::or => Or,
-        Rule::less_than => LessThan,
-        Rule::less_than_equals => LessThanEq,
-        Rule::greater_than => GreaterThan,
-        Rule::greater_than_equals => GreaterThanEq,
-        Rule::equals => Eq,
-        Rule::not_equals => NotEq,
-        rule => unreachable!("Expr::parse expected infix expression, found {rule:?}")
-    };
-
-    Expression::BinOp { lhs: Box::new(lhs), op, rhs: Box::new(rhs) }
-}
-
-fn parse_if_else_block<'input>(mut inner: Pairs<'input, Rule>) -> Expression<'input> {
-    let if_condition = inner.next().unwrap();
-    let if_condition = parse_expression(if_condition.into_inner());
-    let if_block = inner.next().unwrap();
-    let if_block = parse_function_context(if_block.into_inner());
-
-    let mut else_if_chains = vec![];
-
-    while inner.peek().map(|pair| pair.as_rule()) == Some(Rule::else_if_chain) {
-        // Found another else if chain
-        let mut chain = inner.next().unwrap().into_inner();
-        let chain_cond = parse_expression(chain.next().unwrap().into_inner());
-        let chain_block = parse_function_context(chain.next().unwrap().into_inner());
-
-        else_if_chains.push((chain_cond, CodeBlock(chain_block)))
-    }
-
-    let else_block = if inner.peek().map(|pair| pair.as_rule()) == Some(Rule::else_block) {
-        let mut else_rule_inner = inner.next().unwrap().into_inner();
-        let else_code_block_rule = else_rule_inner.next().unwrap();
-        let else_statements = parse_function_context(else_code_block_rule.into_inner());
-        Some(CodeBlock(else_statements))
-    } else {
-        None
-    };
-
-    Expression::IfElseBlock {
-        if_condition: Box::new(if_condition),
-        if_block: CodeBlock(if_block),
-        else_if_chain: else_if_chains,
-        else_block
+        Expression::IfElseBlock {
+            if_condition: Box::new(if_condition),
+            if_block: CodeBlock(if_block),
+            else_if_chain: else_if_chains,
+            else_block
+        }
     }
 }
 
@@ -396,12 +317,13 @@ mod tests {
 
         assert_eq!(statements, vec![
             Statement::LetExpression {
-                variable_binding: "smth",
+                variable_binding: "smth".into(),
                 type_hint: None,
-                rhs: Expression::Integer(3)
+                rhs: Expression::Integer(3),
+                node_id: NodeId::NOT_YET_ASSIGNED
             },
             Statement::Expression(Expression::Assignment {
-                variable: "smth",
+                variable: "smth".into(),
                 rhs: Box::new(Expression::Integer(5))
             })
         ]);
@@ -432,9 +354,10 @@ mod tests {
 
         assert_eq!(statements, vec![
             Statement::LetExpression {
-                variable_binding: "smth",
+                variable_binding: "smth".into(),
                 type_hint: None,
-                rhs: Expression::Integer(3)
+                rhs: Expression::Integer(3),
+                node_id: NodeId::NOT_YET_ASSIGNED
             }
         ]);
     }
@@ -457,14 +380,14 @@ mod tests {
 
         let expected = vec![
             Statement::Expression(Expression::FunctionCall {
-                fn_expr: Box::new(Expression::Identifier("my_function")),
+                fn_expr: Box::new(Expression::Identifier("my_function".into())),
                 arguments: vec![] }
             ),
             Statement::Expression(Expression::FunctionCall {
-                fn_expr: Box::new(Expression::Identifier("my_function")), arguments: second_args }),
+                fn_expr: Box::new(Expression::Identifier("my_function".into())), arguments: second_args }),
             Statement::Expression(Expression::FunctionCall {
                 fn_expr: Box::new(Expression::FunctionCall {
-                    fn_expr: Box::new(Expression::Identifier("my_function")),
+                    fn_expr: Box::new(Expression::Identifier("my_function".into())),
                     arguments: third_args
                 }),
                 arguments: vec![]
@@ -485,9 +408,10 @@ mod tests {
         assert_eq!(statements,
             vec![
                 Statement::LetExpression {
-                    variable_binding: "something",
-                    type_hint: Some("String"),
-                    rhs: Expression::Identifier("test")
+                    variable_binding: "something".into(),
+                    type_hint: Some("String".into()),
+                    rhs: Expression::Identifier("test".into()),
+                    node_id: NodeId::NOT_YET_ASSIGNED,
                 }
             ]
         )
@@ -536,7 +460,7 @@ mod tests {
 
         use Expression::*;
         use BiOperator::*;
-        use super::ast::UnaryOperator::*;
+        use crate::ast::UnaryOperator::*;
 
         let expected = vec![
             BinOp {
@@ -546,20 +470,20 @@ mod tests {
             },
             BinOp {
                 lhs: Box::new(BinOp {
-                    lhs: Box::new(Identifier("a")),
+                    lhs: Box::new(Identifier("a".into())),
                     op: Or,
-                    rhs: Box::new(Identifier("b"))
+                    rhs: Box::new(Identifier("b".into()))
                 }),
                 op: Or,
-                rhs: Box::new(Identifier("c"))
+                rhs: Box::new(Identifier("c".into()))
             },
             UnaryOperator(
                 Not,
                 Box::new(BinOp {
                     lhs: Box::new(BinOp {
-                        lhs: Box::new(Identifier("a")),
+                        lhs: Box::new(Identifier("a".into())),
                         op: BiOperator::Add,
-                        rhs: Box::new(Identifier("b"))
+                        rhs: Box::new(Identifier("b".into()))
                     }),
                     op: BiOperator::And,
                     rhs: Box::new(Boolean(false))
@@ -632,7 +556,7 @@ mod tests {
         "#;
 
         use Statement::*;
-        use super::ast::Expression::*;
+        use crate::ast::Expression::*;
         use BiOperator::*;
 
         let expected = vec![
@@ -643,24 +567,24 @@ mod tests {
                 else_block: None
             },
             IfElseBlock {
-                if_condition: Box::new(BinOp { lhs: Box::new(Identifier("a")), op: Eq, rhs: Box::new(Integer(3)) }),
+                if_condition: Box::new(BinOp { lhs: Box::new(Identifier("a".into())), op: Eq, rhs: Box::new(Integer(3)) }),
                 if_block: CodeBlock(vec![]),
                 else_if_chain: vec![],
                 else_block: Some(CodeBlock(vec![Expression(StringLiteral("c".to_string()))]))
             },
             IfElseBlock {
-                if_condition: Box::new(Identifier("a")),
+                if_condition: Box::new(Identifier("a".into())),
                 if_block: CodeBlock(vec![]),
                 else_if_chain: vec![
-                    (Identifier("c"), CodeBlock(vec![]))
+                    (Identifier("c".into()), CodeBlock(vec![]))
                 ],
                 else_block: None
             },
             IfElseBlock {
-                if_condition: Box::new(Identifier("a")),
+                if_condition: Box::new(Identifier("a".into())),
                 if_block: CodeBlock(vec![]),
                 else_if_chain: vec![
-                    (Identifier("c"), CodeBlock(vec![]))
+                    (Identifier("c".into()), CodeBlock(vec![]))
                 ],
                 else_block: Some(CodeBlock(vec![]))
             }
@@ -682,15 +606,16 @@ mod tests {
 
         let expected = vec![
             Statement::LetExpression {
-                variable_binding: "a",
+                variable_binding: "a".into(),
                 type_hint: None,
+                node_id: NodeId::NOT_YET_ASSIGNED,
                 rhs: Expression::IfElseBlock {
                     // if_condition: Box::new(BinOp {
                     //     lhs: Box::new(Identifier("b")),
                     //     op: BiOperator::Eq,
                     //     rhs: Box::new(Integer(0)),
                     // }),
-                    if_condition: Box::new(Identifier("b")),
+                    if_condition: Box::new(Identifier("b".into())),
                     if_block: vec![Statement::Expression(Integer(3))].into(),
                     else_if_chain: vec![],
                     else_block: CodeBlock(vec![Statement::Expression(Integer(5))]).into()
@@ -712,14 +637,14 @@ mod tests {
         "#;
 
         use Statement::*;
-        use super::ast::Expression::*;
+        use crate::ast::Expression::*;
         use BiOperator::*;
 
         let expected = vec![
             WhileBlock {
-                condition: BinOp { lhs: Box::new(Identifier("a")), op: Eq, rhs: Box::new(Boolean(true)) },
+                condition: BinOp { lhs: Box::new(Identifier("a".into())), op: Eq, rhs: Box::new(Boolean(true)) },
                 block: CodeBlock(vec![
-                    Statement::Expression(FunctionCall { fn_expr: Box::new(Identifier("set_a")), arguments: vec![] })
+                    Statement::Expression(FunctionCall { fn_expr: Box::new(Identifier("set_a".into())), arguments: vec![] })
                 ])
             }
         ];
@@ -738,16 +663,17 @@ mod tests {
         "#;
 
         use Statement::*;
-        use super::ast::Expression::*;
+        use crate::ast::Expression::*;
 
         let expected = vec![
             ForEachLoop {
-                iterator_var_ident: "a", 
-                iterator_expression: Identifier("some_list"),
+                node_id: NodeId::NOT_YET_ASSIGNED,
+                iterator_var_ident: "a".into(), 
+                iterator_expression: Identifier("some_list".into()),
                 block: CodeBlock(vec![
                     Statement::Expression(FunctionCall {
-                        fn_expr: Box::new(Identifier("println")),
-                        arguments: vec![Identifier("a")]
+                        fn_expr: Box::new(Identifier("println".into())),
+                        arguments: vec![Identifier("a".into())]
                     })
                 ])
             }

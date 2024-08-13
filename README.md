@@ -6,6 +6,8 @@ The code quality isn't good (mainly error handling is missing), that's because I
 
 ## TODOs
 
+### features
+
  - [x] boolean operators
  - [x] comparisons
  - [ ] chained comparators
@@ -16,3 +18,16 @@ The code quality isn't good (mainly error handling is missing), that's because I
  - [ ] static/const elements
  - [ ] traits
  - [ ] impl blocks
+ - [ ] constructors
+ - [ ] field access (`my_struct.something`)
+
+### internal
+
+ - [x] Parser struct with context
+ - [x] put all ast into a single file
+ - [ ] node id's
+
+### Name resolution
+
+rustc builds map of NodeId -> Res
+NodeId here is the NodeId of a specific path (i.e. a reference to another thing, like an ident)
