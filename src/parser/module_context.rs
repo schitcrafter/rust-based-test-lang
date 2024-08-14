@@ -10,7 +10,7 @@ use crate::ast::*;
 use super::{PestParser, Rule};
 
 /// Helper function to parse a module context from a string
-pub fn parse_module_context_str<'input>(source: &'input str) -> Vec<OuterExpression<'input>> {
+pub fn parse_module_context_str(source: &str) -> Vec<OuterExpression> {
     let parser = Parser::new(source);
     let rules = PestParser::parse(Rule::module_context, source)
         .expect("Couldn't parse module context");
@@ -248,12 +248,12 @@ mod tests {
     #[test]
     fn module_definition_with_fns() {
         let source = r"
-        mod my_cool_mod {
-            fn my_func() { }
-            fn other_func(a: f64, b: f64) -> f64 { }
-        }
-        mod my_inner_mod;
-        mod my_third_mod { }
+            mod my_cool_mod {
+                fn my_func() { }
+                fn other_func(a: f64, b: f64) -> f64 { }
+            }
+            mod my_inner_mod;
+            mod my_third_mod { }
         ";
 
         use OuterExpression::*;

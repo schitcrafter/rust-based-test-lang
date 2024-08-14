@@ -10,24 +10,25 @@ use crate::ast::*;
 
 use super::{Parser, PestParser, Rule};
 
-const OPERATOR_PARSER: LazyLock<PrattParser<Rule>> = LazyLock::new(|| {
+static OPERATOR_PARSER: LazyLock<PrattParser<Rule>> = LazyLock::new(|| {
     use pest::pratt_parser::{Assoc::*, Op};
     use Rule::*;
 
     // Precedence is defined lowest to highest
     PrattParser::new()
         .op(Op::infix(and, Left) | Op::infix(or, Left))
+        .op(Op::infix(less_than, Left) | Op::infix(less_than_equals, Left)
+        | Op::infix(greater_than, Left) | Op::infix(greater_than_equals, Left)
+        | Op::infix(equals, Left) | Op::infix(not_equals, Left))        
         .op(Op::infix(add, Left) | Op::infix(subtract, Left))
         .op(Op::infix(multiply, Left) | Op::infix(divide, Left) | Op::infix(remainder, Left))
-        .op(Op::infix(less_than, Left) | Op::infix(less_than_equals, Left)
-            | Op::infix(greater_than, Left) | Op::infix(greater_than_equals, Left)
-            | Op::infix(equals, Left) | Op::infix(not_equals, Left))        
+        .op(Op::infix(field_access, Left))
         .op(Op::prefix(unary_minus) | Op::prefix(not))
         .op(Op::postfix(function_call))
 });
 
 /// Helper function to parse a function from a string
-fn parse_function_str<'input>(source: &'input str) -> Vec<Statement<'input>> {
+fn parse_function_str(source: &str) -> Vec<Statement> {
     let parser = Parser::new(source);
     let pairs = PestParser::parse(Rule::function_context, source)
             .expect("Parsing failed");
@@ -96,7 +97,7 @@ impl<'input> Parser<'input> {
 
                     Statement::LetExpression {
                         node_id: NodeId::NOT_YET_ASSIGNED,
-                        variable_binding: Ident::new(&variable_binding),
+                        variable_binding: Ident::new(variable_binding),
                         type_hint: type_hint.map(Path::new),
                         rhs: self.parse_expression(possible_rhs.into_inner())
                     }
@@ -142,6 +143,27 @@ impl<'input> Parser<'input> {
                 Expression::Assignment { variable, rhs: Box::new(rhs) }
             }
             Rule::if_else_block => self.parse_if_else_block(inner_expr.into_inner()),
+            Rule::struct_constructor => {
+                let mut inner = inner_expr.into_inner();
+                let struct_name = inner.next().unwrap().as_str().into();
+
+                let mut fields = vec![];
+
+                for field in inner {
+                    let mut field_inner = field.into_inner();
+                    let struct_field_name = field_inner.next().unwrap().as_str();
+                    let local_field_name = field_inner.next()
+                        .map(|rule| rule.as_str())
+                        .unwrap_or(struct_field_name);
+
+                    fields.push((struct_field_name.into(), local_field_name.into()));
+                }
+
+                Expression::StructConstructor {
+                    struct_name,
+                    fields
+                }
+            }
             rule => unreachable!("Expected inner expression, found '{rule:?}'")
         }
     }
@@ -184,6 +206,16 @@ impl<'input> Parser<'input> {
             Rule::greater_than_equals => GreaterThanEq,
             Rule::equals => Eq,
             Rule::not_equals => NotEq,
+            Rule::field_access => {
+                let rhs = match rhs {
+                    Expression::Identifier(ident) => ident,
+                    rhs => panic!("Expected identifier after field access (`.`), found {rhs:?}")
+                };
+                return Expression::FieldAccess {
+                    lhs: Box::new(lhs),
+                    rhs
+                };
+            },
             rule => unreachable!("Expr::parse expected infix expression, found {rule:?}")
         };
 
@@ -192,6 +224,7 @@ impl<'input> Parser<'input> {
 
     fn parse_if_else_block(&self, mut inner: Pairs<'input, Rule>) -> Expression<'input> {
         let if_condition = inner.next().unwrap();
+        
         let if_condition = self.parse_expression(if_condition.into_inner());
         let if_block = inner.next().unwrap();
         let if_block = self.parse_function_context(if_block.into_inner());
@@ -285,7 +318,7 @@ fn unescape_string(input: &str) -> String {
                         }
 
                         char::from_u32(unicode_value)
-                            .expect(&format!("Not a valid unicode char: '{unicode_value}'"))
+                            .unwrap_or_else(|| panic!("Not a valid unicode char: '{unicode_value}'"))
                     },
                     next_char => panic!("Unknown escape character '{next_char}'")
                 }
@@ -677,6 +710,101 @@ mod tests {
                     })
                 ])
             }
+        ];
+        
+        let statements = dbg!(parse_function_str(source));
+
+        assert_eq!(statements, expected);
+    }
+
+    #[test]
+    fn struct_constructor() {
+        let source = r#"
+            let a = MyStruct {
+                field1: a,
+                field2,
+                field3: c,
+            };
+        "#;
+
+        use Statement::*;
+        use crate::ast::Expression::*;
+
+        let expected = vec![
+            LetExpression {
+                node_id: Default::default(),
+                variable_binding: "a".into(),
+                type_hint: None,
+                rhs: StructConstructor {
+                    struct_name: "MyStruct".into(),
+                    fields: vec![
+                        ("field1", "a"), ("field2", "field2"), ("field3", "c")
+                    ].into_iter().map(|(a,b)| (a.into(), b.into())).collect()
+                }
+            }
+        ];
+        
+        let statements = dbg!(parse_function_str(source));
+
+        assert_eq!(statements, expected);
+    }
+
+    #[test]
+    fn struct_field_access() {
+        let source = r#"
+            let a = MyStruct {
+                field2,
+            };
+            print(a.field2);
+            if a.field2 + 15 == 10 {
+            }
+        "#;
+
+        use Statement::*;
+        use crate::ast::Expression::*;
+
+        let expected = vec![
+            LetExpression {
+                node_id: Default::default(),
+                variable_binding: "a".into(),
+                type_hint: None,
+                rhs: StructConstructor {
+                    struct_name: "MyStruct".into(),
+                    fields: vec![
+                        ("field2".into(), "field2".into())
+                    ]
+                }
+            },
+            Expression(
+                FunctionCall {
+                    fn_expr: Box::new(Identifier("print".into())),
+                    arguments: vec![
+                        FieldAccess {
+                            lhs: Box::new(Identifier("a".into())),
+                            rhs: "field2".into()
+                        }
+                    ]
+                }
+            ),
+            Expression(IfElseBlock {
+                if_condition: Box::new(BinOp {
+                    lhs: Box::new(BinOp {
+                        lhs: Box::new(
+                            FieldAccess {
+                                lhs: Box::new(Identifier("a".into())),
+                                rhs: "field2".into()
+                            }
+                        ),
+                        op: BiOperator::Add,
+                        rhs: Box::new(Integer(15))
+                    }),
+                    op: BiOperator::Eq,
+                    rhs: Box::new(Integer(10))
+                }),
+                if_block: CodeBlock(vec![]),
+                else_if_chain: vec![],
+                else_block: None
+            })
         ];
         
         let statements = dbg!(parse_function_str(source));

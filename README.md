@@ -12,20 +12,21 @@ The code quality isn't good (mainly error handling is missing), that's because I
  - [x] comparisons
  - [ ] chained comparators
  - [x] assignment without let
- - [ ] control structures (if, while, for, match)
+ - [x] control structures (if, while, for)
+ - [ ] match
  - [x] functions
- - [ ] nested modules
+ - [x] nested modules
  - [ ] static/const elements
  - [ ] traits
  - [ ] impl blocks
- - [ ] constructors
- - [ ] field access (`my_struct.something`)
+ - [x] constructors
+ - [x] field access (`my_struct.something`)
 
 ### internal
 
  - [x] Parser struct with context
  - [x] put all ast into a single file
- - [ ] node id's
+ - [x] node id's
 
 ### Name resolution
 

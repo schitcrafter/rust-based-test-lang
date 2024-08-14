@@ -2,8 +2,7 @@ use std::{collections::HashMap, hash::Hash, iter};
 
 use crate::ast::*;
 
-
-pub fn resolve_names<'input>(ast: &mut Vec<OuterExpression<'input>>) {
+pub fn resolve_names(ast: &mut Vec<OuterExpression>) {
     let mut resolver = NameResolutionVisitor::new();
     resolver.start_visiting(ast);
 }
@@ -39,6 +38,12 @@ pub enum RibType {
 pub struct NameResolutionVisitor {
     type_rib_stack: Vec<Rib<String>>,
     ident_rib_stack: Vec<Rib<String>>,
+}
+
+impl Default for NameResolutionVisitor {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl NameResolutionVisitor {
@@ -118,7 +123,7 @@ impl NameResolutionVisitor {
 
 impl<'input> MutAstVisitor<'input> for NameResolutionVisitor {
     fn start_visiting(&mut self, ast: &mut Vec<OuterExpression<'input>>) {
-        self.push_ribs_from_module(&ast);
+        self.push_ribs_from_module(ast);
 
         for expr in ast {
             self.visit_outer_expression(expr);
@@ -133,7 +138,7 @@ impl<'input> MutAstVisitor<'input> for NameResolutionVisitor {
         self.visit_ident(ident);
 
         if let Some(inner) = inner {
-            self.push_ribs_from_module(&inner);
+            self.push_ribs_from_module(inner);
             
             for expr in inner {
                 self.visit_outer_expression(expr);
@@ -167,7 +172,7 @@ impl<'input> MutAstVisitor<'input> for NameResolutionVisitor {
             self.visit_type_path(ty);
         }
         
-        self.push_ident_rib_from_fn_args(&arguments);
+        self.push_ident_rib_from_fn_args(arguments);
         self.visit_codeblock(inner);
 
         debug_assert_eq!(self.ident_rib_stack.last().map(|rib| rib.rib_type), Some(RibType::Function));
@@ -210,6 +215,54 @@ impl<'input> MutAstVisitor<'input> for NameResolutionVisitor {
                 debug_assert_eq!(self.ident_rib_stack.last().map(|rib| rib.rib_type), Some(RibType::Local));
                 self.ident_rib_stack.pop();
             }
+        }
+    }
+
+    fn visit_expression(&mut self, expr: &mut Expression<'input>) {
+        use Expression::*;
+        match expr {
+            Identifier(ident) => self.visit_ident_path(ident),
+            BinOp { lhs, op: _, rhs } => {
+                self.visit_expression(lhs);
+                self.visit_expression(rhs);
+            }
+            UnaryOperator(_, inner_expr) => self.visit_expression(inner_expr),
+            FunctionCall { fn_expr, arguments } => {
+                self.visit_expression(fn_expr);
+                for arg_expr in arguments {
+                    self.visit_expression(arg_expr);
+                }
+            }
+            Assignment { variable, rhs } => {
+                self.visit_ident_path(variable);
+                self.visit_expression(rhs);
+            }
+            IfElseBlock { if_condition, if_block, else_if_chain, else_block } => {
+                self.visit_expression(if_condition);
+                self.visit_codeblock(if_block);
+
+                for (expr, block) in else_if_chain {
+                    self.visit_expression(expr);
+                    self.visit_codeblock(block);
+                }
+
+                if let Some(block) = else_block {
+                    self.visit_codeblock(block);
+                }
+            }
+            FieldAccess { lhs, rhs: _ } => {
+                self.visit_expression(lhs);
+                // NOTE: don't visit the right-hand side, as it's a field of a struct.
+            }
+            StructConstructor { struct_name, fields } => {
+                self.visit_type_path(struct_name);
+                for (struct_field, local) in fields {
+                    self.visit_ident_path(struct_field);
+                    self.visit_ident_path(local);
+                }
+            }
+            Integer(..) | Float(..) | StringLiteral(..) | Boolean(..)
+            | Character(..) => { }
         }
     }
 

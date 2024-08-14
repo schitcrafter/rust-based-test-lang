@@ -49,6 +49,7 @@ operator = _{
     | and | or
     | less_than_equals | less_than | greater_than_equals | greater_than
     | equals | not_equals
+    | field_access
 }
     add = { "+" }
     subtract = { "-" }
@@ -63,6 +64,7 @@ operator = _{
     greater_than_equals = { ">=" }
     equals = { "==" }
     not_equals = { "!=" }
+    field_access = { "." }
 
 function_call = { "(" ~ function_call_arguments ~  ")"}
 function_call_arguments = _{ (expression ~ ",")* ~ expression? }
@@ -82,8 +84,15 @@ assignment = { identifier ~ "=" ~ expression }
 expression = {
     if_else_block
     | assignment
+    | struct_constructor
     | operator_expression
 }
+
+/// Wrapper rule around operator_expression
+expression_only_op = { operator_expression }
+
+struct_constructor = { identifier ~ "{" ~ (struct_constructor_field ~ ",")* ~ struct_constructor_field?~ "}" }
+struct_constructor_field = { identifier ~ (":" ~ identifier)? }
 
 operator_expression = { atom ~ (operator ~ atom)* }
 
@@ -93,10 +102,10 @@ if_else_block = {
     ~ else_block?
 }
 
-if_block = _{ "if" ~ expression ~ code_block }
-else_if_chain = { "else" ~ "if" ~ expression ~ code_block }
+if_block = _{ "if" ~ expression_only_op ~ code_block }
+else_if_chain = { "else" ~ "if" ~ expression_only_op ~ code_block }
 else_block = { "else" ~ code_block }
 
-while_block = { "while" ~ expression ~ code_block }
+while_block = { "while" ~ expression_only_op ~ code_block }
 
-for_each_loop = { "for" ~ identifier ~ "in" ~ expression ~ code_block }
+for_each_loop = { "for" ~ identifier ~ "in" ~ expression_only_op ~ code_block }

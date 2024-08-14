@@ -215,6 +215,10 @@ pub enum Expression<'input> {
         op: BiOperator,
         rhs: Box<Expression<'input>>,
     },
+    FieldAccess {
+        lhs: Box<Expression<'input>>,
+        rhs: Path<'input>,
+    },
     UnaryOperator(UnaryOperator, Box<Expression<'input>>),
     FunctionCall {
         fn_expr: Box<Expression<'input>>,
@@ -231,6 +235,11 @@ pub enum Expression<'input> {
         else_if_chain: Vec<(Expression<'input>, CodeBlock<'input>)>,
         else_block: Option<CodeBlock<'input>>,
     },
+    StructConstructor {
+        struct_name: Path<'input>,
+        /// (struct field name, local var name)
+        fields: Vec<(Path<'input>, Path<'input>)>
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -407,7 +416,19 @@ pub trait MutAstVisitor<'i> {
                     self.visit_codeblock(block);
                 }
             }
-            _ => {}
+            FieldAccess { lhs, rhs } => {
+                self.visit_expression(lhs);
+                self.visit_ident_path(rhs);
+            }
+            StructConstructor { struct_name, fields } => {
+                self.visit_type_path(struct_name);
+                for (struct_field, local) in fields {
+                    self.visit_ident_path(struct_field);
+                    self.visit_ident_path(local);
+                }
+            }
+            Integer(..) | Float(..) | StringLiteral(..) | Boolean(..)
+            | Character(..) => { }
         }
     }
 

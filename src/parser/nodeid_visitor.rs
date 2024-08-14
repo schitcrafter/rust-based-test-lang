@@ -1,5 +1,3 @@
-use std::marker::PhantomData;
-
 use crate::ast::*;
 
 pub fn initialise_nodeids(ast: &mut Vec<OuterExpression>) {
@@ -7,22 +5,18 @@ pub fn initialise_nodeids(ast: &mut Vec<OuterExpression>) {
     visitor.start_visiting(ast);
 }
 
-#[derive(Debug, PartialEq)]
-pub struct NodeIdVisitor<'input> {
-    _phantom: PhantomData<&'input ()>,
+#[derive(Debug, Default, PartialEq)]
+pub struct NodeIdVisitor {
     current_node_id: NodeId,
 }
 
-impl<'input> NodeIdVisitor<'input> {
-    pub fn new() -> NodeIdVisitor<'input> {
-        NodeIdVisitor {
-            current_node_id: NodeId::FIRST_NODEID,
-            _phantom: Default::default()
-        }
+impl NodeIdVisitor {
+    pub fn new() -> NodeIdVisitor {
+        Default::default()
     }
 }
 
-impl<'input> MutAstVisitor<'input> for NodeIdVisitor<'input> {
+impl<'input> MutAstVisitor<'input> for NodeIdVisitor {
     fn visit_nodeid(&mut self, node_id: &mut NodeId) {
         *node_id = self.current_node_id;
         self.current_node_id = self.current_node_id.next();
