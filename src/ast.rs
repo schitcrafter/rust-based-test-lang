@@ -1,5 +1,7 @@
-use std::{collections::HashMap, fmt::Debug};
+use std::{collections::HashMap, fmt::Debug, str::FromStr};
 use derive_more::{From, Into};
+
+
 
 /// ID used to refer to individual nodes.
 /// A node is everything that can be used
@@ -42,6 +44,76 @@ pub type FxHashMap<K, V> = HashMap<K, V>;
 
 /// Map of NodeId -> V
 pub type NodeMap<V> = FxHashMap<NodeId, V>;
+
+/// Provides information on what a reference points
+/// to, as well as (if applicable) a NodeId.
+/// Cannot point to a module, as it doesn't
+/// make sense to refer to a module in code.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Ref {
+    Struct(NodeId),
+    Enum(NodeId),
+    Local(NodeId),
+    Function(NodeId),
+    PrimitiveType(PrimitiveType),
+}
+
+impl Ref {
+    pub fn from_prim(prim: &str) -> Ref {
+        Ref::PrimitiveType(prim.parse().expect("Invalid primitive type"))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PrimitiveType {
+    Float(FloatType),
+    Int(IntType),
+    String,
+    Boolean,
+    Char,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FloatType {
+    F32,
+    F64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum IntType {
+    Signed(IntWidth),
+    Unsigned(IntWidth),
+}
+
+/// Valid width's for the integer types
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum IntWidth {
+    Bit32,
+    Bit64,
+}
+
+impl FromStr for PrimitiveType {
+
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        use PrimitiveType::*;
+        use IntType::*;
+        use IntWidth::*;
+        match s {
+            "f32" => Ok(Float(FloatType::F32)),
+            "f64" => Ok(Float(FloatType::F64)),
+            "i32" => Ok(Int(Signed(Bit32))),
+            "i64" => Ok(Int(Signed(Bit64))),
+            "u32" => Ok(Int(Unsigned(Bit32))),
+            "u64" => Ok(Int(Unsigned(Bit64))),
+            "String" => Ok(String),
+            "char" => Ok(Char),
+            "bool" => Ok(Boolean),
+            _ => Err(())
+        }
+    }
+}
 
 /// Only used when defining a new type, use
 /// Path when referring
@@ -92,19 +164,6 @@ impl<'input> From<&'input str> for Ident<'input> {
     }
 }
 
-/// Provides information on what a reference points
-/// to, as well as (if applicable) a NodeId.
-/// Cannot point to a module, as it doesn't
-/// make sense to refer to a module in code.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Ref {
-    Struct(NodeId),
-    Enum(NodeId),
-    Local(NodeId),
-    Function(NodeId),
-    PrimitiveType, // TODO:
-}
-
 /// Used when we want to refer to another object,
 /// like a struct or a local variable or whatever.
 /// TODO: Replace node_id here with a Ref type,
@@ -128,6 +187,13 @@ impl<'input> Path<'input> {
         Path {
             ident,
             node_ref: Some(node_ref)
+        }
+    }
+
+    pub fn new_prim(ident: &'input str) -> Path<'input> {
+        Path {
+            ident,
+            node_ref: Some(Ref::from_prim(ident))
         }
     }
 }

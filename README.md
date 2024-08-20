@@ -21,6 +21,7 @@ The code quality isn't good (mainly error handling is missing), that's because I
  - [ ] impl blocks
  - [x] constructors
  - [x] field access (missing name resolution/type check)
+ - [x] primitive types
 
 ### internal
 

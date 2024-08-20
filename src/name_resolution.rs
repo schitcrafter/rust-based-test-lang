@@ -294,10 +294,14 @@ impl<'input> MutAstVisitor<'input> for NameResolutionVisitor {
     fn visit_ident_path(&mut self, ident_path: &mut Path<'input>) {
         let Path { ident, node_ref } = ident_path;
 
-        for rib in self.ident_rib_stack.iter().rev() {
-            if let Some(resolved_node_id) = rib.node_ref_map.get(*ident) {
-                *node_ref = Some(*resolved_node_id);
-                break;
+        if let Ok(primitive) = ident.parse() {
+            *node_ref = Some(Ref::PrimitiveType(primitive));
+        } else {
+            for rib in self.ident_rib_stack.iter().rev() {
+                if let Some(resolved_node_id) = rib.node_ref_map.get(*ident) {
+                    *node_ref = Some(*resolved_node_id);
+                    break;
+                }
             }
         }
 
@@ -309,10 +313,14 @@ impl<'input> MutAstVisitor<'input> for NameResolutionVisitor {
     fn visit_type_path(&mut self, type_path: &mut Path<'input>) {
         let Path { ident, node_ref } = type_path;
 
-        for rib in self.type_rib_stack.iter().rev() {
-            if let Some(resolved_node_id) = rib.node_ref_map.get(*ident) {
-                *node_ref = Some(*resolved_node_id);
-                break;
+        if let Ok(primitive) = ident.parse() {
+            *node_ref = Some(Ref::PrimitiveType(primitive));
+        } else {
+            for rib in self.type_rib_stack.iter().rev() {
+                if let Some(resolved_node_id) = rib.node_ref_map.get(*ident) {
+                    *node_ref = Some(*resolved_node_id);
+                    break;
+                }
             }
         }
 
@@ -346,7 +354,7 @@ mod tests {
                 ident: "function".into(),
                 arguments: vec![FnArg {
                     ident: Ident::new("arg"),
-                    ty: Path::new("u64"),
+                    ty: Path::new_prim("u64"),
                     node_id: 2.into()
                 }],
                 return_type: None,
@@ -396,7 +404,7 @@ mod tests {
                 ident: "function".into(),
                 arguments: vec![FnArg {
                     ident: Ident::new("arg"),
-                    ty: Path::new("u64"),
+                    ty: Path::new_prim("u64"),
                     node_id: 2.into()
                 }],
                 return_type: None,
