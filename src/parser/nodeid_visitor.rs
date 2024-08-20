@@ -5,14 +5,22 @@ pub fn initialise_nodeids(ast: &mut Vec<OuterExpression>) {
     visitor.start_visiting(ast);
 }
 
-#[derive(Debug, Default, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct NodeIdVisitor {
     current_node_id: NodeId,
 }
 
 impl NodeIdVisitor {
     pub fn new() -> NodeIdVisitor {
-        Default::default()
+        NodeIdVisitor {
+            current_node_id: NodeId::FIRST_NODEID
+        }
+    }
+}
+
+impl Default for NodeIdVisitor {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

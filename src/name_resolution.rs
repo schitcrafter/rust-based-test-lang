@@ -64,21 +64,18 @@ impl NameResolutionVisitor {
         use OuterExpression::*;
         for expr in exprs {
             let node_ref = expr.to_node_ref();
-            if node_ref == None {
+            if node_ref.is_none() {
                 continue;
             }
             let node_ref = node_ref.unwrap();
             
             // Add to ident map
-            match expr {
-                Function { ident, .. } => {
-                    ident_rib_map.insert(
-                        ident.inner().to_string(),
-                        node_ref
-                    );
-                },
-                _ => { },
-            };
+            if let Function { ident, .. } = expr {
+                ident_rib_map.insert(
+                    ident.inner().to_string(),
+                    node_ref
+                );
+            }
 
             // Add to type map
             match expr {
@@ -91,47 +88,6 @@ impl NameResolutionVisitor {
                 _ => {},
             };
         }
-        // for expr in exprs {
-        //     match expr {
-        //         Struct { node_id, ident, ..} => {
-        //             if type_rib_map.contains_key(ident.inner()) {
-        //                 panic!("Type {:?} is already defined in node_id={:?}",
-        //                     ident.inner(), type_rib_map[ident.inner()]
-        //                 );
-        //             } else {
-        //                 type_rib_map.insert(ident.inner().to_string(), *node_id);
-        //             }
-        //         }
-        //         Enum { node_id, ident, .. } => {
-        //             if type_rib_map.contains_key(ident.inner()) {
-        //                 panic!("Type {:?} is already defined in node_id={:?}",
-        //                     ident.inner(), type_rib_map[ident.inner()]
-        //                 );
-        //             } else {
-        //                 type_rib_map.insert(ident.inner().to_string(), *node_id);
-        //             }
-        //         }
-        //         Function { node_id, ident, .. } => {
-        //             if ident_rib_map.contains_key(ident.inner()) {
-        //                 panic!("Identifier {:?} is already defined in node_id={:?}",
-        //                     ident.inner(), ident_rib_map[ident.inner()]
-        //                 );
-        //             } else {
-        //                 ident_rib_map.insert(ident.inner().to_string(), *node_id);
-        //             }
-        //         }
-        //         ModuleDefinition { node_id, ident, .. } => {
-        //             if ident_rib_map.contains_key(ident.inner()) {
-        //                 panic!("Identifier {:?} is already defined in node_id={:?}",
-        //                     ident.inner(), ident_rib_map[ident.inner()]
-        //                 );
-        //             } else {
-        //                 ident_rib_map.insert(ident.inner().to_string(), *node_id);
-        //             }
-        //         }
-        //         _ => todo!()
-        //     }
-        // }
 
         let type_rib = Rib {
             node_ref_map: type_rib_map,
@@ -154,7 +110,7 @@ impl NameResolutionVisitor {
             if ident_rib_map.contains_key(ident.inner()) {
                 panic!("Argument names must be exclusive, found {:?} twice", ident.inner());
             } else {
-                ident_rib_map.insert(ident.inner().to_string(), *node_id);
+                ident_rib_map.insert(ident.inner().to_string(), Ref::Local(*node_id));
             }
         }
 
@@ -236,7 +192,7 @@ impl<'input> MutAstVisitor<'input> for NameResolutionVisitor {
                 }
 
                 self.ident_rib_stack.push(
-                    Rib::new_with_single_entry(RibType::Local, variable_binding.inner().to_string(), *node_id)
+                    Rib::new_with_single_entry(RibType::Local, variable_binding.inner().to_string(), Ref::Local(*node_id))
                 );
 
                 self.visit_expression(rhs);
@@ -251,7 +207,7 @@ impl<'input> MutAstVisitor<'input> for NameResolutionVisitor {
                 self.visit_expression(iterator_expression);
 
                 self.ident_rib_stack.push(
-                    Rib::new_with_single_entry(RibType::Local, iterator_var_ident.inner().to_string(), *node_id)
+                    Rib::new_with_single_entry(RibType::Local, iterator_var_ident.inner().to_string(), Ref::Local(*node_id))
                 );
 
                 self.visit_codeblock(block);
@@ -336,35 +292,32 @@ impl<'input> MutAstVisitor<'input> for NameResolutionVisitor {
 
     /// Resolves this ident path, setting its NodeId reference
     fn visit_ident_path(&mut self, ident_path: &mut Path<'input>) {
-        let Path { ident, node_ref: node_id } = ident_path;
+        let Path { ident, node_ref } = ident_path;
 
         for rib in self.ident_rib_stack.iter().rev() {
             if let Some(resolved_node_id) = rib.node_ref_map.get(*ident) {
-                *node_id = *resolved_node_id;
+                *node_ref = Some(*resolved_node_id);
                 break;
             }
         }
 
-        if *node_id == NodeId::NOT_YET_ASSIGNED {
+        if node_ref.is_none() {
             eprintln!("Couldn't find identifier {ident:?}");
-            *node_id = NodeId::NAME_NOT_FOUND;
         }
-
     }
     
     fn visit_type_path(&mut self, type_path: &mut Path<'input>) {
-        let Path { ident, node_ref: node_id } = type_path;
+        let Path { ident, node_ref } = type_path;
 
         for rib in self.type_rib_stack.iter().rev() {
             if let Some(resolved_node_id) = rib.node_ref_map.get(*ident) {
-                *node_id = *resolved_node_id;
+                *node_ref = Some(*resolved_node_id);
                 break;
             }
         }
 
-        if *node_id == NodeId::NOT_YET_ASSIGNED {
+        if node_ref.is_none() {
             eprintln!("Couldn't find type {ident:?}");
-            *node_id = NodeId::NAME_NOT_FOUND;
         }
     }
 }
@@ -393,7 +346,7 @@ mod tests {
                 ident: "function".into(),
                 arguments: vec![FnArg {
                     ident: Ident::new("arg"),
-                    ty: Path::new_with_nodeid("u64", 0),
+                    ty: Path::new("u64"),
                     node_id: 2.into()
                 }],
                 return_type: None,
@@ -408,13 +361,13 @@ mod tests {
                         node_id: 4.into(),
                         variable_binding: "other".into(),
                         type_hint: None,
-                        rhs: Expression::Identifier(Path::new_with_nodeid("smth", 3))
+                        rhs: Expression::Identifier(Path::new_with_ref("smth", Ref::Local(3.into())))
                     },
                     Statement::LetExpression {
                         node_id: 5.into(),
                         variable_binding: "third".into(),
                         type_hint: None,
-                        rhs: Expression::Identifier(Path::new_with_nodeid("arg", 2))
+                        rhs: Expression::Identifier(Path::new_with_ref("arg", Ref::Local(2.into())))
                     }
                 ])
             }
@@ -443,17 +396,17 @@ mod tests {
                 ident: "function".into(),
                 arguments: vec![FnArg {
                     ident: Ident::new("arg"),
-                    ty: Path::new_with_nodeid("u64", 0),
+                    ty: Path::new("u64"),
                     node_id: 2.into()
                 }],
                 return_type: None,
                 inner: CodeBlock(vec![
                     Statement::Expression(
                         Expression::FunctionCall {
-                            fn_expr: Box::new(Expression::Identifier(Path::new_with_nodeid("function", 1))),
+                            fn_expr: Box::new(Expression::Identifier(Path::new_with_ref("function", Ref::Function(1.into())))),
                             arguments: vec![
                                 Expression::BinOp {
-                                    lhs: Box::new(Expression::Identifier(Path::new_with_nodeid("arg", 2))),
+                                    lhs: Box::new(Expression::Identifier(Path::new_with_ref("arg", Ref::Local(2.into())))),
                                     op: BiOperator::Add,
                                     rhs: Box::new(Expression::Integer(1))
                                 }
@@ -509,13 +462,13 @@ mod tests {
                                     type_hint: None,
                                     rhs: Expression::Integer(2),
                                 },
-                                Statement::Expression(Expression::Identifier(Path::new_with_nodeid("a", 3))),
+                                Statement::Expression(Expression::Identifier(Path::new_with_ref("a", Ref::Local(3.into())))),
                             ]),
                         else_if_chain: vec![],
                         else_block: None,
                     }),
                     Statement::Expression(Expression::Identifier(
-                        Path::new_with_nodeid("a", 2)
+                        Path::new_with_ref("a", Ref::Local(2.into()))
                     ))
                 ])
             }
@@ -551,15 +504,15 @@ mod tests {
                     Statement::ForEachLoop {
                         node_id: 2.into(),
                         iterator_var_ident: "a".into(),
-                        iterator_expression: Expression::Identifier(Path::new_with_nodeid("some_list", NodeId::NAME_NOT_FOUND)),
+                        iterator_expression: Expression::Identifier(Path::new("some_list")),
                         block: CodeBlock(vec![
                             Statement::Expression(
                                 Expression::FunctionCall {
                                     fn_expr: Box::new(Expression::Identifier(
-                                        Path::new_with_nodeid("print", NodeId::NAME_NOT_FOUND)
+                                        Path::new("print")
                                     )),
                                     arguments: vec![
-                                        Expression::Identifier(Path::new_with_nodeid("a", 2))
+                                        Expression::Identifier(Path::new_with_ref("a", Ref::Local(2.into())))
                                     ]
                                 }
                             )
@@ -568,10 +521,10 @@ mod tests {
                     Statement::Expression(
                         Expression::FunctionCall {
                             fn_expr: Box::new(Expression::Identifier(
-                                Path::new_with_nodeid("print", NodeId::NAME_NOT_FOUND)
+                                Path::new("print")
                             )),
                             arguments: vec![
-                                Expression::Identifier(Path::new_with_nodeid("a", NodeId::NAME_NOT_FOUND))
+                                Expression::Identifier(Path::new("a"))
                             ]
                         }
                     )

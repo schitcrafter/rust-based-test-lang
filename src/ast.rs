@@ -123,6 +123,13 @@ impl<'input> Path<'input> {
     pub fn new(ident: &'input str) -> Path<'input> {
         ident.into()
     }
+
+    pub fn new_with_ref(ident: &'input str, node_ref: Ref) -> Path<'input> {
+        Path {
+            ident,
+            node_ref: Some(node_ref)
+        }
+    }
 }
 
 impl<'input> From<&'input str> for Path<'input> {
