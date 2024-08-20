@@ -92,6 +92,19 @@ impl<'input> From<&'input str> for Ident<'input> {
     }
 }
 
+/// Provides information on what a reference points
+/// to, as well as (if applicable) a NodeId.
+/// Cannot point to a module, as it doesn't
+/// make sense to refer to a module in code.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Ref {
+    Struct(NodeId),
+    Enum(NodeId),
+    Local(NodeId),
+    Function(NodeId),
+    PrimitiveType, // TODO:
+}
+
 /// Used when we want to refer to another object,
 /// like a struct or a local variable or whatever.
 /// TODO: Replace node_id here with a Ref type,
@@ -103,19 +116,12 @@ impl<'input> From<&'input str> for Ident<'input> {
 pub struct Path<'input> {
     pub ident: &'input str,
     /// The node this path is referring to
-    pub node_id: NodeId,
+    pub node_ref: Option<Ref>,
 }
 
 impl<'input> Path<'input> {
     pub fn new(ident: &'input str) -> Path<'input> {
         ident.into()
-    }
-
-    pub fn new_with_nodeid(ident: &'input str, node_id: impl Into<NodeId>) -> Path<'input> {
-        Path {
-            ident,
-            node_id: node_id.into(),
-        }
     }
 }
 
@@ -123,7 +129,7 @@ impl<'input> From<&'input str> for Path<'input> {
     fn from(ident: &'input str) -> Self {
         Self {
             ident,
-            node_id: Default::default()
+            node_ref: Default::default()
         }
     }
 }
@@ -160,6 +166,19 @@ pub enum OuterExpression<'input> {
     ConstElement,
     Trait,
     ImplBlock,
+}
+
+impl<'input> OuterExpression<'input> {
+    pub fn to_node_ref(&self) -> Option<Ref> {
+        use OuterExpression::*;
+        match self {
+            Struct { node_id, .. } => Some(Ref::Struct(*node_id)),
+            Enum { node_id, .. } => Some(Ref::Enum(*node_id)),
+            Function { node_id, .. } => Some(Ref::Function(*node_id)),
+            ModuleDefinition { .. } => None,
+            StaticElement | ConstElement | Trait | ImplBlock => todo!()
+        }
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -433,14 +452,15 @@ pub trait MutAstVisitor<'i> {
     }
 
     fn visit_nodeid(&mut self, _node_id: &mut NodeId) { }
+    fn visit_ref(&mut self, _node_ref: &mut Option<Ref>) { }
     fn visit_ident(&mut self, _ident: &mut Ident<'i>) { }
     fn visit_type(&mut self, _ty: &mut Ty<'i>) { }
 
     fn visit_ident_path(&mut self, ident_path: &mut Path<'i>) {
-        self.visit_nodeid(&mut ident_path.node_id)
+        self.visit_ref(&mut ident_path.node_ref);
     }
 
     fn visit_type_path(&mut self, type_path: &mut Path<'i>) {
-        self.visit_nodeid(&mut type_path.node_id);
+        self.visit_ref(&mut type_path.node_ref);
     }
 }

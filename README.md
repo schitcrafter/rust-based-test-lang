@@ -20,7 +20,7 @@ The code quality isn't good (mainly error handling is missing), that's because I
  - [ ] traits
  - [ ] impl blocks
  - [x] constructors
- - [x] field access (`my_struct.something`)
+ - [x] field access (missing name resolution/type check)
 
 ### internal
 

@@ -9,15 +9,15 @@ pub fn resolve_names(ast: &mut Vec<OuterExpression>) {
 
 #[derive(Debug)]
 pub struct Rib<T> {
-    pub nodeid_map: FxHashMap<T, NodeId>,
+    pub node_ref_map: FxHashMap<T, Ref>,
     pub rib_type: RibType,
 }
 
 impl<T: Eq + Hash> Rib<T> {
-    pub fn new_with_single_entry(rib_type: RibType, key: T, node_id: NodeId) -> Rib<T> {
+    pub fn new_with_single_entry(rib_type: RibType, key: T, node_id: Ref) -> Rib<T> {
         Rib {
             rib_type,
-            nodeid_map: iter::once((key, node_id)).collect()
+            node_ref_map: iter::once((key, node_id)).collect()
         }
     }
 }
@@ -49,8 +49,8 @@ impl Default for NameResolutionVisitor {
 impl NameResolutionVisitor {
     pub fn new() -> Self {
         Self {
-            type_rib_stack: vec![Rib { rib_type: RibType::Module, nodeid_map: Default::default() }],
-            ident_rib_stack: vec![Rib { rib_type: RibType::Module, nodeid_map: Default::default() }]
+            type_rib_stack: vec![Rib { rib_type: RibType::Module, node_ref_map: Default::default() }],
+            ident_rib_stack: vec![Rib { rib_type: RibType::Module, node_ref_map: Default::default() }]
         }
     }
 
@@ -63,38 +63,82 @@ impl NameResolutionVisitor {
 
         use OuterExpression::*;
         for expr in exprs {
-            match expr {
-                Struct { node_id, ident, ..}
-                | Enum { node_id, ident, .. }
-                => {
-                    if type_rib_map.contains_key(ident.inner()) {
-                        panic!("Type {:?} is already defined in node_id={:?}",
-                            ident.inner(), type_rib_map[ident.inner()]
-                        );
-                    } else {
-                        type_rib_map.insert(ident.inner().to_string(), *node_id);
-                    }
-                }
-                Function { node_id, ident, .. }
-                | ModuleDefinition { node_id, ident, .. }=> {
-                    if ident_rib_map.contains_key(ident.inner()) {
-                        panic!("Identifier {:?} is already defined in node_id={:?}",
-                            ident.inner(), ident_rib_map[ident.inner()]
-                        );
-                    } else {
-                        ident_rib_map.insert(ident.inner().to_string(), *node_id);
-                    }
-                }
-                _ => todo!()
+            let node_ref = expr.to_node_ref();
+            if node_ref == None {
+                continue;
             }
+            let node_ref = node_ref.unwrap();
+            
+            // Add to ident map
+            match expr {
+                Function { ident, .. } => {
+                    ident_rib_map.insert(
+                        ident.inner().to_string(),
+                        node_ref
+                    );
+                },
+                _ => { },
+            };
+
+            // Add to type map
+            match expr {
+                Struct { ident, .. } | Enum { ident, .. } => {
+                    type_rib_map.insert(
+                        ident.inner().to_string(),
+                        node_ref
+                    );
+                },
+                _ => {},
+            };
         }
+        // for expr in exprs {
+        //     match expr {
+        //         Struct { node_id, ident, ..} => {
+        //             if type_rib_map.contains_key(ident.inner()) {
+        //                 panic!("Type {:?} is already defined in node_id={:?}",
+        //                     ident.inner(), type_rib_map[ident.inner()]
+        //                 );
+        //             } else {
+        //                 type_rib_map.insert(ident.inner().to_string(), *node_id);
+        //             }
+        //         }
+        //         Enum { node_id, ident, .. } => {
+        //             if type_rib_map.contains_key(ident.inner()) {
+        //                 panic!("Type {:?} is already defined in node_id={:?}",
+        //                     ident.inner(), type_rib_map[ident.inner()]
+        //                 );
+        //             } else {
+        //                 type_rib_map.insert(ident.inner().to_string(), *node_id);
+        //             }
+        //         }
+        //         Function { node_id, ident, .. } => {
+        //             if ident_rib_map.contains_key(ident.inner()) {
+        //                 panic!("Identifier {:?} is already defined in node_id={:?}",
+        //                     ident.inner(), ident_rib_map[ident.inner()]
+        //                 );
+        //             } else {
+        //                 ident_rib_map.insert(ident.inner().to_string(), *node_id);
+        //             }
+        //         }
+        //         ModuleDefinition { node_id, ident, .. } => {
+        //             if ident_rib_map.contains_key(ident.inner()) {
+        //                 panic!("Identifier {:?} is already defined in node_id={:?}",
+        //                     ident.inner(), ident_rib_map[ident.inner()]
+        //                 );
+        //             } else {
+        //                 ident_rib_map.insert(ident.inner().to_string(), *node_id);
+        //             }
+        //         }
+        //         _ => todo!()
+        //     }
+        // }
 
         let type_rib = Rib {
-            nodeid_map: type_rib_map,
+            node_ref_map: type_rib_map,
             rib_type: RibType::Module,
         };
         let ident_rib = Rib {
-            nodeid_map: ident_rib_map,
+            node_ref_map: ident_rib_map,
             rib_type: RibType::Module,
         };
 
@@ -115,7 +159,7 @@ impl NameResolutionVisitor {
         }
 
         self.ident_rib_stack.push(Rib {
-            nodeid_map: ident_rib_map,
+            node_ref_map: ident_rib_map,
             rib_type: RibType::Function
         });
     }
@@ -269,7 +313,7 @@ impl<'input> MutAstVisitor<'input> for NameResolutionVisitor {
     fn visit_codeblock(&mut self, codeblock: &mut CodeBlock<'input>) {
         self.ident_rib_stack.push(Rib {
             rib_type: RibType::Block,
-            nodeid_map: HashMap::new()
+            node_ref_map: HashMap::new()
         });
 
         for stmt in &mut codeblock.0 {
@@ -292,10 +336,10 @@ impl<'input> MutAstVisitor<'input> for NameResolutionVisitor {
 
     /// Resolves this ident path, setting its NodeId reference
     fn visit_ident_path(&mut self, ident_path: &mut Path<'input>) {
-        let Path { ident, node_id } = ident_path;
+        let Path { ident, node_ref: node_id } = ident_path;
 
         for rib in self.ident_rib_stack.iter().rev() {
-            if let Some(resolved_node_id) = rib.nodeid_map.get(*ident) {
+            if let Some(resolved_node_id) = rib.node_ref_map.get(*ident) {
                 *node_id = *resolved_node_id;
                 break;
             }
@@ -309,10 +353,10 @@ impl<'input> MutAstVisitor<'input> for NameResolutionVisitor {
     }
     
     fn visit_type_path(&mut self, type_path: &mut Path<'input>) {
-        let Path { ident, node_id } = type_path;
+        let Path { ident, node_ref: node_id } = type_path;
 
         for rib in self.type_rib_stack.iter().rev() {
-            if let Some(resolved_node_id) = rib.nodeid_map.get(*ident) {
+            if let Some(resolved_node_id) = rib.node_ref_map.get(*ident) {
                 *node_id = *resolved_node_id;
                 break;
             }
